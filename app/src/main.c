@@ -47,6 +47,8 @@
 #define IDC_VAL_DUR      1025
 #define IDC_VAL_LOOP     1026
 #define IDC_VAL_LOOPST   1027
+#define IDC_CAP_LOOPEND  1028
+#define IDC_VAL_LOOPEND  1029
 #define IDC_CAP_NAME     1030
 #define IDC_CAP_CH       1031
 #define IDC_CAP_RATE     1032
@@ -77,9 +79,11 @@ typedef struct {
     HWND btnSpd100, btnFlsm;
     HWND checkLoop, progress;
     HWND capName, capCh, capRate, capDur, capSamples, capLoop, capLoopSt;
+    HWND capLoopEnd;
     HWND capPath;
     HWND valName, valPath, valRate, valCh, valSamples, valDur;
     HWND valLoop, valLoopSt, valState, valTime, valSpeed, valDevRate;
+    HWND valLoopEnd;
 } Controls;
 
 static HWND g_hwnd;
@@ -264,6 +268,7 @@ static void clear_info_panel(void)
     SetWindowTextW(g_ctl.valDur, L"—");
     SetWindowTextW(g_ctl.valLoop, L"—");
     SetWindowTextW(g_ctl.valLoopSt, L"No disponible");
+    SetWindowTextW(g_ctl.valLoopEnd, L"No disponible");
     EnableWindow(g_ctl.checkLoop, FALSE);
 }
 
@@ -284,10 +289,14 @@ static void fill_info_panel(const PlayerSnapshot *s)
         format_time(t, 40, (double)s->loop_start / s->sample_rate);
         swprintf(buf, 128, L"%u (%s)", s->loop_start, t);
         SetWindowTextW(g_ctl.valLoopSt, buf);
+        swprintf(buf, 128, L"%llu (fin del archivo)",
+                 (unsigned long long)s->total_samples);
+        SetWindowTextW(g_ctl.valLoopEnd, buf);
         SetWindowTextW(g_ctl.valLoop, L"Sí");
     } else {
         SetWindowTextW(g_ctl.valLoop, L"No");
         SetWindowTextW(g_ctl.valLoopSt, L"No disponible");
+        SetWindowTextW(g_ctl.valLoopEnd, L"No disponible");
     }
     EnableWindow(g_ctl.checkLoop, s->file_loop != 0);
     SendMessageW(g_ctl.checkLoop, BM_SETCHECK,
@@ -506,6 +515,70 @@ static void browse_files(void)
     }
 }
 
+/* ------------------------------------------------- progress with loop ---- */
+
+/* Custom progress bar: the loop section [loop_start, total) is shaded and a
+ * marker line shows the loop start, so both loop points are visible while
+ * the song plays. Paint state is UI-thread-only (set in update_ui). */
+#define PROGRESS_CLASS_NAME L"MkwProgress"
+
+static uint64_t g_prog_position;
+static uint64_t g_prog_total;
+static uint32_t g_prog_loop_start;
+static int      g_prog_has_loop;
+static HBRUSH   g_brushProgFill;   /* played portion */
+static HBRUSH   g_brushProgLoop;   /* loop region */
+static HBRUSH   g_brushProgMarker; /* loop start line */
+
+static LRESULT CALLBACK progress_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(hwnd, &ps);
+        RECT rc;
+        int w, h;
+
+        GetClientRect(hwnd, &rc);
+        w = rc.right - rc.left;
+        h = rc.bottom - rc.top;
+        FillRect(dc, &rc, GetSysColorBrush(COLOR_WINDOW));
+        FrameRect(dc, &rc, GetSysColorBrush(COLOR_3DSHADOW));
+        if (g_prog_total > 0 && w > 2 && h > 2) {
+            int span = w - 2;
+            int loop_x = -1;
+            int fill_x;
+
+            if (g_prog_has_loop) {
+                loop_x = 1 + (int)((uint64_t)span * g_prog_loop_start /
+                                   g_prog_total);
+                if (loop_x > w - 2)
+                    loop_x = w - 2;
+                if (loop_x > 1) {
+                    RECT lr = { loop_x, 1, w - 1, h - 1 };
+                    FillRect(dc, &lr, g_brushProgLoop);
+                }
+            }
+            fill_x = 1 + (int)((uint64_t)span * g_prog_position /
+                               g_prog_total);
+            if (fill_x > w - 1)
+                fill_x = w - 1;
+            if (fill_x > 1) {
+                RECT fr = { 1, 1, fill_x, h - 1 };
+                FillRect(dc, &fr, g_brushProgFill);
+            }
+            if (loop_x >= 0) {
+                RECT mr = { loop_x - 1, 0, loop_x + 1, h };
+                FillRect(dc, &mr, g_brushProgMarker);
+            }
+        }
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
 /* -------------------------------------------------------------- layout -- */
 
 static void move_ctl(HWND h, int x, int y, int w, int hh)
@@ -569,7 +642,10 @@ static void layout(void)
     move_ctl(g_ctl.valLoop, col2 + 78, y, rightW - (col2 - rightX) - 90, 18);
     y += 24;
     move_ctl(g_ctl.capLoopSt, x0, y, 84, 18);
-    move_ctl(g_ctl.valLoopSt, x0 + 88, y, rightW - 104, 18);
+    move_ctl(g_ctl.valLoopSt, x0 + 88, y, col2 - (x0 + 88) - 12, 18);
+    move_ctl(g_ctl.capLoopEnd, col2, y, 74, 18);
+    move_ctl(g_ctl.valLoopEnd, col2 + 78, y, rightW - (col2 - rightX) - 90,
+             18);
     y += 26;
     move_ctl(g_ctl.capPath, x0, y, 84, 18);
     move_ctl(g_ctl.valPath, x0 + 88, y, rightW - 104, 20);
@@ -666,6 +742,8 @@ static void create_controls(HWND parent)
                              IDC_CAP_LOOP, 0, 0, 0, 0);
     g_ctl.capLoopSt = make_ctl(parent, 0, L"STATIC", L"Inicio de loop:", 0,
                                IDC_CAP_LOOPST, 0, 0, 0, 0);
+    g_ctl.capLoopEnd = make_ctl(parent, 0, L"STATIC", L"Fin de loop:", 0,
+                                IDC_CAP_LOOPEND, 0, 0, 0, 0);
     g_ctl.capPath = make_ctl(parent, 0, L"STATIC", L"Ruta:", 0,
                              IDC_CAP_PATH, 0, 0, 0, 0);
     g_ctl.valName = make_ctl(parent, 0, L"STATIC", L"—", 0,
@@ -685,6 +763,8 @@ static void create_controls(HWND parent)
                              IDC_VAL_LOOP, 0, 0, 0, 0);
     g_ctl.valLoopSt = make_ctl(parent, 0, L"STATIC", L"No disponible", 0,
                                IDC_VAL_LOOPST, 0, 0, 0, 0);
+    g_ctl.valLoopEnd = make_ctl(parent, 0, L"STATIC", L"No disponible", 0,
+                                IDC_VAL_LOOPEND, 0, 0, 0, 0);
 
     g_ctl.groupPlay = make_ctl(parent, 0, L"BUTTON", L"Reproducción",
                                BS_GROUPBOX, 0, 0, 0, 0, 0);
@@ -694,9 +774,8 @@ static void create_controls(HWND parent)
                               0, IDC_BTN_PAUSE, 0, 0, 0, 0);
     g_ctl.btnStop = make_ctl(parent, 0, L"BUTTON", L"Detener",
                              0, IDC_BTN_STOP, 0, 0, 0, 0);
-    g_ctl.progress = make_ctl(parent, 0, PROGRESS_CLASSW, L"",
-                              PBS_SMOOTH, IDC_PROGRESS, 0, 0, 0, 0);
-    SendMessageW(g_ctl.progress, PBM_SETRANGE32, 0, 1000);
+    g_ctl.progress = make_ctl(parent, 0, PROGRESS_CLASS_NAME, L"",
+                              0, IDC_PROGRESS, 0, 0, 0, 0);
     g_ctl.valState = make_ctl(parent, 0, L"STATIC", L"Estado: Detenido",
                               SS_RIGHT, IDC_VAL_STATE, 0, 0, 0, 0);
     g_ctl.valTime = make_ctl(parent, 0, L"STATIC", L"0:00.000 / 0:00.000",
@@ -807,17 +886,22 @@ static void update_ui(void)
         SetWindowTextW(g_ctl.valDevRate, L"Dispositivo: —");
     }
 
+    if (g_prog_position != s.position || g_prog_total != s.total_samples ||
+        g_prog_has_loop != s.file_loop ||
+        g_prog_loop_start != s.loop_start) {
+        g_prog_position = s.position;
+        g_prog_total = s.total_samples;
+        g_prog_has_loop = s.file_loop;
+        g_prog_loop_start = s.loop_start;
+        InvalidateRect(g_ctl.progress, NULL, FALSE);
+    }
     if (s.total_samples > 0) {
-        int pos = (int)((s.position * 1000ULL) / s.total_samples);
-        if (pos > 1000) pos = 1000;
-        SendMessageW(g_ctl.progress, PBM_SETPOS, pos, 0);
         format_time(t1, 40, devRate > 0 ? (double)s.position / devRate : 0.0);
         format_time(t2, 40, devRate > 0
                           ? (double)s.total_samples / devRate : 0.0);
         swprintf(buf, 160, L"%s / %s", t1, t2);
         SetWindowTextW(g_ctl.valTime, buf);
     } else {
-        SendMessageW(g_ctl.progress, PBM_SETPOS, 0, 0);
         SetWindowTextW(g_ctl.valTime, L"0:00.000 / 0:00.000");
     }
 
@@ -989,6 +1073,14 @@ static int run_selftest(void)
                 g_hasInvalid ? " + invalid file" : "");
 
     st_check(g_rowCount >= 2, "at least 2 tracks loaded");
+
+    /* The progress control must be our loop-aware custom class. */
+    {
+        wchar_t cls[64] = L"";
+        GetClassNameW(g_ctl.progress, cls, 64);
+        st_check(wcscmp(cls, PROGRESS_CLASS_NAME) == 0,
+                 "progress control uses the loop-aware custom class");
+    }
 
     /* Invalid file must be rejected without entering the list. */
     if (g_hasInvalid) {
@@ -1210,6 +1302,20 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
                          CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                          DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
     g_brushFace = CreateSolidBrush(GetSysColor(COLOR_BTNFACE));
+
+    {
+        WNDCLASSW wcProg;
+        memset(&wcProg, 0, sizeof wcProg);
+        wcProg.lpfnWndProc = progress_proc;
+        wcProg.hInstance = inst;
+        wcProg.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
+        wcProg.lpszClassName = PROGRESS_CLASS_NAME;
+        if (!RegisterClassW(&wcProg))
+            return 1;
+    }
+    g_brushProgFill = CreateSolidBrush(RGB(70, 140, 220));
+    g_brushProgLoop = CreateSolidBrush(RGB(255, 236, 200));
+    g_brushProgMarker = CreateSolidBrush(RGB(214, 92, 24));
 
     g_player = player_create(1);
     if (!g_player) {

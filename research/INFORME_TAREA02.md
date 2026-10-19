@@ -212,3 +212,20 @@ Evidencias destacadas dentro de la batería:
 
 - T3 (Android) y T5 (web) sobre el núcleo C ya verificado; el plegado y el
   modelo de velocidad deben reutilizarse, no reimplementarse.
+
+## 10. Cambios posteriores a la entrega (T2+)
+
+En la UI, tras la entrega de T2 y a petición del usuario:
+
+- Se retiraron los botones 1,5× y 2,0× y el slider 50–200 %: la velocidad solo
+  cambia con **1,0×** y **Final Lap ×1,06812**. La API `player_set_speed(ppm)`
+  sigue admitiendo cualquier razón de velocidad; el motor no cambió.
+- La barra de progreso pasó de `msctls_progress32` a un control propio
+  (`MkwProgress`): sombrea la región `[loop_start, total)` en tono ámbar y
+  dibuja una marca naranja en `loop_start`, de modo que los dos puntos de loop
+  se ven mientras suena la canción (p. ej. tKD_N: marca al ~27,6 %,
+  1347584 de 4876838 muestras). Verificado con reproducción real.
+- El panel de información añade la fila «Fin de loop»: en los archivos MKW
+  estudiados es el final del audio (diseño del modelo de loop `[start, total)`).
+- El autotest de la UI pasó de 17 a 18 comprobaciones (verifica que la barra
+  usa la clase personalizada `MkwProgress`).
