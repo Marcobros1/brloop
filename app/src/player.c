@@ -194,6 +194,58 @@ static int rewind_to_locked(Player *p, uint32_t sample)
     return 0;
 }
 
+/* Recreate the exact decoder state at `sample` and leave the block that
+ * contains it decoded in pcm. BRSTM blocks carry no embedded history, so
+ * the walk restarts from the closest exact anchor: the captured loop-block
+ * state (valid for samples inside or after the loop block) or the file's
+ * initial history at block 0. On success carried enters target_block+1.
+ * Returns 0 if a block read/decode fails along the way. */
+static int seek_decode_to_locked(Player *p, uint32_t sample)
+{
+    const BrstmInfo *info = &p->brstm.info;
+    uint32_t target_block;
+    DspAdpcmState anchor[BRSTM_MAX_CHANNELS];
+    uint32_t anchor_block = 0;
+
+    if (sample >= info->total_samples) {
+        p->cursor = info->total_samples;
+        p->buf_block = PLAYER_BLOCK_NONE;
+        p->have_prev = 0;
+        return 1;
+    }
+
+    /* Fast path: the target sits in the current or the previous block. */
+    if (rewind_to_locked(p, sample))
+        return 1;
+
+    target_block = brstm_block_for_sample(&p->brstm, sample);
+    if (p->have_loop_state && target_block >= p->loop_block) {
+        anchor_block = p->loop_block;
+        memcpy(anchor, p->loop_entering, sizeof anchor);
+    } else {
+        for (uint32_t c = 0; c < info->channels; c++) {
+            anchor[c].hist1 = info->init_hist1[c];
+            anchor[c].hist2 = info->init_hist2[c];
+        }
+    }
+
+    p->buf_block = PLAYER_BLOCK_NONE;
+    p->have_prev = 0;
+    memcpy(p->carried, anchor, sizeof p->carried);
+    p->carried_block = anchor_block;
+
+    for (uint32_t b = anchor_block; b <= target_block; b++) {
+        if (b == p->loop_block && !p->have_loop_state) {
+            /* Sequential traversal of the loop block: exact capture. */
+            memcpy(p->loop_entering, p->carried, sizeof p->loop_entering);
+            p->have_loop_state = 1;
+        }
+        if (b != p->carried_block || !decode_block_locked(p, b))
+            return 0;
+    }
+    return 1;
+}
+
 /* Produce interleaved PCM16 into out. Caller holds the lock and the state
  * is PLAYING. */
 static uint32_t render_locked(Player *p, int16_t *out, uint32_t frames)
@@ -554,8 +606,13 @@ int player_play(Player *p)
         p->state = PLAYER_PLAYING;
         rc = 0;
     } else if (p->state == PLAYER_STOPPED || p->state == PLAYER_FINISHED) {
-        reset_decode_locked(p);
-        p->position = 0;
+        /* At the end (or never opened playback): start from the beginning.
+         * A player_seek() while stopped left a position < total, and the
+         * playback resumes from there. */
+        if (p->position >= p->brstm.info.total_samples) {
+            reset_decode_locked(p);
+            p->position = 0;
+        }
         p->wraps = 0;
         p->finish_pending = 0;
         if (!p->headless) {
@@ -599,6 +656,45 @@ int player_stop(Player *p)
     unlock(p);
     wake_engine(p);
     return 0;
+}
+
+int player_seek(Player *p, uint64_t frame)
+{
+    int rc = -1;
+    lock(p);
+    if (!p->file_open) {
+        unlock(p);
+        return -1;
+    }
+
+    if (frame > p->brstm.info.total_samples)
+        frame = p->brstm.info.total_samples;
+
+    int keep_playing = (p->state == PLAYER_PLAYING
+                        || p->state == PLAYER_PAUSED);
+
+    /* Drop whatever is queued so the new position takes effect now. */
+    if (!p->headless)
+        close_device_locked(p);
+
+    if (seek_decode_to_locked(p, (uint32_t)frame)) {
+        p->cursor = (uint32_t)frame;
+        p->position = frame;
+        p->decode_failed = 0;
+        p->finish_pending = 0;
+        if (p->state == PLAYER_FINISHED)
+            p->state = PLAYER_STOPPED;
+        rc = 0;
+    }
+
+    if (rc == 0 && !p->headless && keep_playing) {
+        reopen_device_locked(p); /* resumes paused if it was paused */
+        if (!p->audio.open)
+            p->state = PLAYER_STOPPED;
+    }
+    unlock(p);
+    wake_engine(p);
+    return rc;
 }
 
 void player_set_speed(Player *p, uint32_t speed_ppm)

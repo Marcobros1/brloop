@@ -229,3 +229,11 @@ En la UI, tras la entrega de T2 y a petición del usuario:
   estudiados es el final del audio (diseño del modelo de loop `[start, total)`).
 - El autotest de la UI pasó de 17 a 18 comprobaciones (verifica que la barra
   usa la clase personalizada `MkwProgress`).
+- **Seek** (`player_seek`): clic o arrastre sobre la barra salta a ese punto
+  (durante el arrastre se dibuja la línea de destino). Los bloques BRSTM no
+  llevan historia embebida, así que el salto redecodifica desde el ancla
+  exacta más cercana: el estado de loop capturado (destinos en o después del
+  bloque de loop) o el inicio del archivo. PCM byte-idéntico al pase lineal
+  en todo el rango (grupo `seek`, 31 checks, incluido el wrap tras saltar
+  cerca del final). En detenido, «Reproducir» continúa desde el punto
+  buscado; «Detener» sigue volviendo a 0. Autotest de la UI a 20 checks.

@@ -85,6 +85,17 @@ int player_stop(Player *p);
 void player_set_speed(Player *p, uint32_t speed_ppm);
 void player_set_loop(Player *p, int enabled);
 
+/* Jump to a source-sample position in [0, total_samples]. Works in any
+ * state; while audio is playing the queued buffers are dropped so the new
+ * position takes effect immediately and playback continues from there.
+ * While stopped, the next player_play() resumes from the seeked position
+ * (player_stop() still rewinds to 0). BRSTM blocks carry no embedded
+ * decoder history, so the jump re-decodes from the closest exact anchor
+ * (the captured loop-block state, or the file start): exact everywhere,
+ * worst case a linear decode up to the target. Returns 0, or -1 if no file
+ * is open or the re-decode fails (decode_failed is set). */
+int player_seek(Player *p, uint64_t frame);
+
 PlayerSnapshot player_get_state(Player *p);
 
 /* Produce up to `frames` interleaved PCM16 frames, advancing the position

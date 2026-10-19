@@ -530,6 +530,31 @@ static HBRUSH   g_brushProgFill;   /* played portion */
 static HBRUSH   g_brushProgLoop;   /* loop region */
 static HBRUSH   g_brushProgMarker; /* loop start line */
 
+static void update_ui(void);
+
+/* Seek: click (or drag end) on the bar jumps to that source position. */
+static int g_prog_drag;
+static int g_prog_drag_x;
+
+static void prog_seek_from_x(HWND hwnd, int x)
+{
+    RECT rc;
+    int span;
+
+    if (!g_player || g_prog_total == 0)
+        return;
+    GetClientRect(hwnd, &rc);
+    span = (rc.right - rc.left) - 2; /* minus the 1px frame on each side */
+    if (span < 1)
+        return;
+    x -= 1;
+    if (x < 0) x = 0;
+    if (x > span) x = span;
+    if (player_seek(g_player, (uint64_t)g_prog_total * (uint64_t)x
+                    / (uint64_t)span) == 0)
+        update_ui();
+}
+
 static LRESULT CALLBACK progress_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
@@ -572,9 +597,45 @@ static LRESULT CALLBACK progress_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 FillRect(dc, &mr, g_brushProgMarker);
             }
         }
+        if (g_prog_drag && w > 2) {
+            int dx = g_prog_drag_x < 1 ? 1 : g_prog_drag_x;
+            if (dx > w - 2) dx = w - 2;
+            RECT dr = { dx - 1, 0, dx + 1, h };
+            FillRect(dc, &dr, GetSysColorBrush(COLOR_3DDKSHADOW));
+        }
         EndPaint(hwnd, &ps);
         return 0;
     }
+
+    case WM_LBUTTONDOWN:
+        if (g_prog_total > 0) {
+            g_prog_drag = 1;
+            g_prog_drag_x = (int)(short)LOWORD(lp);
+            SetCapture(hwnd);
+            prog_seek_from_x(hwnd, g_prog_drag_x);
+            InvalidateRect(hwnd, NULL, FALSE);
+        }
+        return 0;
+
+    case WM_MOUSEMOVE:
+        if (g_prog_drag) {
+            g_prog_drag_x = (int)(short)LOWORD(lp);
+            InvalidateRect(hwnd, NULL, FALSE);
+        }
+        return 0;
+
+    case WM_LBUTTONUP:
+        if (g_prog_drag) {
+            g_prog_drag = 0;
+            ReleaseCapture();
+            prog_seek_from_x(hwnd, (int)(short)LOWORD(lp));
+            InvalidateRect(hwnd, NULL, FALSE);
+        }
+        return 0;
+
+    case WM_SETCURSOR:
+        SetCursor(LoadCursorW(NULL, (LPCWSTR)IDC_HAND));
+        return TRUE;
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
@@ -1137,6 +1198,28 @@ static int run_selftest(void)
     }
     send_cmd(IDC_BTN_PAUSE);
     st_check(wait_state(PLAYER_PLAYING, 2000), "resume reaches PLAYING");
+
+    /* Seek: a click on the progress bar jumps near that point and the
+     * playback keeps going from there. */
+    {
+        RECT rc;
+        int x;
+        PlayerSnapshot s1, s2;
+
+        GetClientRect(g_ctl.progress, &rc);
+        x = (rc.right - rc.left) * 3 / 4;
+        SendMessageW(g_ctl.progress, WM_LBUTTONDOWN, 0, MAKELPARAM(x, 8));
+        SendMessageW(g_ctl.progress, WM_LBUTTONUP, 0, MAKELPARAM(x, 8));
+        pump(100);
+        s1 = player_get_state(g_player);
+        st_check(s1.position > s1.total_samples * 55 / 100
+                 && s1.position < s1.total_samples * 80 / 100,
+                 "click on the progress bar seeks near that point");
+        pump(900);
+        s2 = player_get_state(g_player);
+        st_check(s2.state == PLAYER_PLAYING && s2.position > s1.position,
+                 "playback continues from the seeked position");
+    }
 
     /* Speed change to the FLSM factor while playing. */
     send_cmd(IDC_BTN_FLSM);

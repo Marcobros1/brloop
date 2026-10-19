@@ -656,6 +656,127 @@ static void test_loop_off_looped(void)
     player_destroy(p);
 }
 
+/* Seek: after a jump the PCM must be identical to the same frames of a
+ * linear pass (loop off). BRSTM blocks carry no embedded history, so
+ * player_seek() re-decodes from the closest exact anchor (the captured
+ * loop-block state, or the file start): every position is exact. */
+static void test_seek(void)
+{
+    Player *p;
+    char path[600], err[512];
+    PlayerSnapshot s;
+    uint32_t total, ch, ref_len, got, i, t, want;
+    uint32_t targets[4];
+    int16_t *ref;
+
+    note("== seek (exact jump to a source position) ==");
+    p = player_create(0);
+    if (!p) {
+        check(0, "headless player created");
+        return;
+    }
+    check(player_seek(p, 12345) == -1, "seek without a file returns -1");
+
+    col_path("tKD_N.brstm", path, sizeof path);
+    err[0] = '\0';
+    if (player_open(p, path, err, sizeof err) != 0) {
+        check(0, "open tKD_N.brstm: %s", err);
+        player_destroy(p);
+        return;
+    }
+
+    s = player_get_state(p);
+    total = (uint32_t)s.total_samples;
+    ch = s.channels;
+
+    /* Linear reference pass with the loop off. */
+    player_set_loop(p, 0);
+    ref = (int16_t *)malloc((size_t)total * ch * sizeof(int16_t));
+    if (!ref) {
+        check(0, "reference buffer allocated for %u frames", total);
+        player_close(p);
+        player_destroy(p);
+        return;
+    }
+    check(player_play(p) == 0, "linear pass starts");
+    ref_len = 0;
+    while (ref_len < total) {
+        got = player_render(p, g_chunk, 4096);
+        if (got == 0)
+            break;
+        memcpy(ref + (size_t)ref_len * ch, g_chunk,
+               (size_t)got * ch * sizeof(int16_t));
+        ref_len += got;
+    }
+    check(ref_len == total, "linear pass covers the file (%u frames)", ref_len);
+    /* Final call drives the end-of-stream transition (same as loopoff). */
+    got = player_render(p, g_chunk, 16);
+    check(got == 0 && player_get_state(p).state == PLAYER_FINISHED,
+          "loop-off pass ends FINISHED");
+
+    /* Jump targets: file start, mid-file before the loop, the loop point
+     * itself and near the end. */
+    targets[0] = 1;
+    targets[1] = 100000u;
+    targets[2] = s.loop_start;
+    targets[3] = total - 777u;
+    for (i = 0; i < 4; i++) {
+        t = targets[i];
+        want = total - t;
+        if (want > 1024)
+            want = 1024;
+        check(player_seek(p, t) == 0, "seek(%u) accepted", t);
+        check(player_get_state(p).position == t,
+              "position reports %u right after seek", t);
+        check(player_play(p) == 0, "play resumes from the seeked point");
+        got = player_render(p, g_chunk, want);
+        check(got == want, "render returns %u frames after seek", want);
+        check(memcmp(g_chunk, ref + (size_t)t * ch,
+                     (size_t)want * ch * sizeof(int16_t)) == 0,
+              "PCM after seek(%u) matches the linear pass", t);
+        (void)player_stop(p);
+    }
+
+    /* Seek to the end behaves like a finished pass: play restarts at 0. */
+    check(player_seek(p, total) == 0 && player_get_state(p).position == total,
+          "seek clamps to total_samples");
+    check(player_play(p) == 0, "play after seek-to-end starts");
+    got = player_render(p, g_chunk, 4096);
+    check(got == 4096 && memcmp(g_chunk, ref, 4096 * ch * sizeof(int16_t)) == 0,
+          "play after seek-to-end restarts from the beginning");
+    (void)player_stop(p);
+
+    /* Seek while playing: rendering continues exactly at the target, with
+     * the captured loop state as anchor (target after loop_start). */
+    player_set_loop(p, 1);
+    (void)player_play(p);
+    (void)player_render(p, g_chunk, 4096);
+    t = 2000000u;
+    check(player_seek(p, t) == 0 && player_get_state(p).position == t,
+          "seek while playing updates the position");
+    got = player_render(p, g_chunk, 1024);
+    check(got == 1024 && memcmp(g_chunk, ref + (size_t)t * ch,
+                                1024 * ch * sizeof(int16_t)) == 0,
+          "PCM after a seek while playing matches the linear pass");
+
+    /* Seek near the end with the loop on: the wrap lands on loop_start and
+     * the audio keeps matching the reference (exact loop state). */
+    t = total - 500u;
+    check(player_seek(p, t) == 0, "seek(%u) near the end with loop on", t);
+    got = player_render(p, g_chunk, 2000);
+    check(got == 2000
+          && memcmp(g_chunk, ref + (size_t)t * ch,
+                    500 * ch * sizeof(int16_t)) == 0
+          && memcmp(g_chunk + 500 * ch,
+                    ref + (size_t)s.loop_start * ch,
+                    1500 * ch * sizeof(int16_t)) == 0,
+          "wrap after a seek matches the reference at loop_start");
+
+    free(ref);
+    player_close(p);
+    player_destroy(p);
+}
+
 static void test_memory(void)
 {
     Player *p;
@@ -1309,8 +1430,8 @@ int main(int argc, char **argv)
                 "usage: player_tests --collection <dir> --invalid <dir> "
                 "--vgmstream <test.exe> --work <dir> "
                 "[--report <file>] [--only <group>]\n"
-                "groups: metadata speed invalid loop noloop loopoff memory "
-                "th probe ta realtime\n");
+                "groups: metadata speed invalid loop noloop loopoff seek "
+                "memory th probe ta realtime\n");
         return 2;
     }
     if (report[0]) {
@@ -1335,6 +1456,7 @@ int main(int argc, char **argv)
     RUN("loop", test_loop_reference);
     RUN("noloop", test_no_loop_end);
     RUN("loopoff", test_loop_off_looped);
+    RUN("seek", test_seek);
     RUN("memory", test_memory);
     RUN("th", test_transport_headless);
     RUN("probe", test_resource_probe);
