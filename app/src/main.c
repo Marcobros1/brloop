@@ -32,11 +32,8 @@
 #define IDC_BTN_PAUSE    1006
 #define IDC_BTN_STOP     1007
 #define IDC_CHECK_LOOP   1008
-#define IDC_SPEED        1009
 #define IDC_BTN_SPD100   1010
 #define IDC_BTN_FLSM     1011
-#define IDC_BTN_SPD150   1012
-#define IDC_BTN_SPD200   1013
 #define IDC_PROGRESS     1014
 #define IDC_VAL_STATE    1015
 #define IDC_VAL_TIME     1016
@@ -77,8 +74,8 @@ typedef struct {
     HWND groupLib, groupInfo, groupPlay, groupSpeed;
     HWND btnOpen, btnRemove, btnClear;
     HWND btnPlay, btnPause, btnStop;
-    HWND btnSpd100, btnFlsm, btnSpd150, btnSpd200;
-    HWND checkLoop, speed, progress;
+    HWND btnSpd100, btnFlsm;
+    HWND checkLoop, progress;
     HWND capName, capCh, capRate, capDur, capSamples, capLoop, capLoopSt;
     HWND capPath;
     HWND valName, valPath, valRate, valCh, valSamples, valDur;
@@ -591,14 +588,10 @@ static void layout(void)
     /* Speed. */
     y = m + infoH + g + playH + g;
     move_ctl(g_ctl.groupSpeed, rightX, y, rightW, speedH);
-    move_ctl(g_ctl.speed, rightX + 12, y + 24, rightW - 292, 28);
-    move_ctl(g_ctl.valSpeed, rightX + rightW - 12 - 170 - 6 - 84, y + 28,
-             84, 20);
+    move_ctl(g_ctl.valSpeed, rightX + 12, y + 28, 84, 20);
     move_ctl(g_ctl.valDevRate, rightX + rightW - 12 - 170, y + 28, 170, 20);
     move_ctl(g_ctl.btnSpd100, rightX + 12, y + 60, 56, 26);
     move_ctl(g_ctl.btnFlsm, rightX + 76, y + 60, 146, 26);
-    move_ctl(g_ctl.btnSpd150, rightX + 230, y + 60, 56, 26);
-    move_ctl(g_ctl.btnSpd200, rightX + 294, y + 60, 56, 26);
 }
 
 /* ------------------------------------------------------------ creation -- */
@@ -714,11 +707,6 @@ static void create_controls(HWND parent)
 
     g_ctl.groupSpeed = make_ctl(parent, 0, L"BUTTON", L"Velocidad",
                                 BS_GROUPBOX, 0, 0, 0, 0, 0);
-    g_ctl.speed = make_ctl(parent, 0, TRACKBAR_CLASSW, L"",
-                           TBS_NOTICKS | TBS_HORZ | TBS_TOOLTIPS,
-                           IDC_SPEED, 0, 0, 0, 0);
-    SendMessageW(g_ctl.speed, TBM_SETRANGE, TRUE, MAKELPARAM(50, 200));
-    SendMessageW(g_ctl.speed, TBM_SETPOS, TRUE, 100);
     g_ctl.valSpeed = make_ctl(parent, 0, L"STATIC", L"1,00×", SS_RIGHT,
                               IDC_VAL_SPEED, 0, 0, 0, 0);
     g_ctl.valDevRate = make_ctl(parent, 0, L"STATIC", L"Dispositivo: —",
@@ -727,10 +715,6 @@ static void create_controls(HWND parent)
                                IDC_BTN_SPD100, 0, 0, 0, 0);
     g_ctl.btnFlsm = make_ctl(parent, 0, L"BUTTON", L"Final Lap ×1,06812", 0,
                              IDC_BTN_FLSM, 0, 0, 0, 0);
-    g_ctl.btnSpd150 = make_ctl(parent, 0, L"BUTTON", L"1,5×", 0,
-                               IDC_BTN_SPD150, 0, 0, 0, 0);
-    g_ctl.btnSpd200 = make_ctl(parent, 0, L"BUTTON", L"2,0×", 0,
-                               IDC_BTN_SPD200, 0, 0, 0, 0);
 
     g_ctl.status = CreateWindowExW(0, STATUSCLASSNAMEW, L"Listo.",
                                    WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
@@ -756,8 +740,6 @@ static void apply_speed(uint32_t ppm)
     player_set_speed(g_player, ppm);
     format_speed(buf, 40, ppm);
     SetWindowTextW(g_ctl.valSpeed, buf);
-    SendMessageW(g_ctl.speed, TBM_SETPOS, TRUE,
-                 (int)(ppm / 10000u));
 }
 
 static void update_ui(void)
@@ -897,12 +879,6 @@ static void on_command(int id)
     case IDC_BTN_FLSM:
         apply_speed(PLAYER_FLSM_SPEED_PPM);
         break;
-    case IDC_BTN_SPD150:
-        apply_speed(1500000u);
-        break;
-    case IDC_BTN_SPD200:
-        apply_speed(2000000u);
-        break;
     default:
         break;
     }
@@ -943,20 +919,6 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if ((lv->uNewState ^ lv->uOldState) & LVIS_SELECTED
                 && (lv->uNewState & LVIS_SELECTED) && lv->iItem >= 0)
                 select_track(lv->iItem);
-        }
-        return 0;
-    }
-
-    case WM_HSCROLL: {
-        if ((HWND)wp == g_ctl.speed) {
-            int pos = (int)SendMessageW(g_ctl.speed, TBM_GETPOS, 0, 0);
-            if (LOWORD(wp) != TB_THUMBTRACK) {
-                wchar_t buf[40];
-                player_set_speed(g_player, (uint32_t)pos * 10000u);
-                format_speed(buf, 40, (uint32_t)pos * 10000u);
-                SetWindowTextW(g_ctl.valSpeed, buf);
-                update_ui();
-            }
         }
         return 0;
     }

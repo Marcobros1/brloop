@@ -19,7 +19,7 @@ Fuera de alcance en T2: Android (T3) y web (T5).
 ## 2. Arquitectura implementada
 
 ```
-main.c        interfaz Win32 (lista, panel de metadatos, transporte, slider);
+main.c        interfaz Win32 (lista, panel de metadatos, transporte, controles de velocidad);
               nunca toca muestras ni el lector BRSTM; modo --selftest que
               conduce la ventana real y sus manejadores reales
 player.c      cursor de decodificación, wrap del loop, velocidad, máquina de
@@ -54,13 +54,13 @@ las mismas muestras más rápido, el tono sube en proporción — el efecto pedi
 |-----------------------|-----------|--------------------|--------------------|
 | 1.0× (botón)          | 1000000   | 44100              | 48000              |
 | FLSM (botón)          | 1068120   | 47104              | 51269              |
-| 1.5× / 2.0× (botón)   | 1500000 / 2000000 | 66150      | 72000              |
-| Slider (50…200)       | pos·10000 | paso entero de 1 % | paso entero de 1 % |
 
 - `PLAYER_FLSM_SPEED_PPM = 1068120` reproduce las conversiones **medidas**:
   44100 → 47104 y 48000 → 51269 (T0 y colección).
-- El slider trabaja en enteros de porcentaje; el factor FLSM (106,812 %) solo
-  se alcanza con su botón.
+- Solo existen dos caminos de UI para la velocidad: los botones **1,0×** y
+  **Final Lap** (el slider 50–200 % y los botones 1,5×/2,0× se retiraron tras
+  la entrega de T2). La API `player_set_speed(ppm)` sigue admitiendo cualquier
+  razón de velocidad.
 - **1.06812 es una cota observada en los archivos MKW estudiados, no una
   constante universal**; cualquier otro ppm es una relación de velocidad
   simple. Así queda documentado en `player.h`.
