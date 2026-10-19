@@ -1,0 +1,37 @@
+# ---- Compilación (artefactos generados) ----
+app/build/
+core/build/
+*.obj
+*.exe
+*.pdb
+*.ilk
+*.lib
+*.exp
+*.res
+
+# ---- Audio: nunca se versiona música ni audio generado ----
+*.brstm
+*.brstm.*
+*.wav
+*.mp3
+*.ogg
+*.flac
+
+# ---- Archivos operacionales del agente (no son el proyecto) ----
+production/
+.opencode/
+opencode*.json
+*.log
+
+# ---- Salidas temporales de pruebas ----
+t1_verify/
+t2_work/
+t2_verify/
+*_report.txt
+
+# ---- Editores y sistema ----
+.vs/
+.vscode/
+*.user
+Thumbs.db
+desktop.ini
