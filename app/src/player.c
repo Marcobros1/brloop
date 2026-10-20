@@ -65,6 +65,7 @@ struct Player {
     PlayerState state;
     int loop_enabled;
     uint32_t speed_ppm;
+    int channel_pair;    /* -1 = mix all channels; else source stereo pair */
     uint64_t position;   /* source samples already heard */
     uint32_t wraps;
     uint32_t last_wrap_position;
@@ -252,6 +253,10 @@ static uint32_t render_locked(Player *p, int16_t *out, uint32_t frames)
 {
     const BrstmInfo *info = &p->brstm.info;
     uint32_t channels = info->channels;
+    /* A selected pair renders source channels 2p/2p+1 as plain stereo; the
+     * default emits every source channel (the fold happens at write time).
+     * The pair is validated in player_set_channel_pair and reset on open. */
+    int pair = p->channel_pair;
     uint32_t produced = 0;
 
     while (produced < frames) {
@@ -289,9 +294,19 @@ static uint32_t render_locked(Player *p, int16_t *out, uint32_t frames)
         if (take > bcount - off)
             take = bcount - off;
 
-        memcpy(out + (size_t)produced * channels,
-               p->pcm + (size_t)off * channels,
-               (size_t)take * channels * sizeof(int16_t));
+        if (pair >= 0) {
+            const int16_t *src = p->pcm + (size_t)off * channels;
+            int16_t *dst = out + (size_t)produced * 2;
+            uint32_t lc = (uint32_t)pair * 2;
+            for (uint32_t s = 0; s < take; s++) {
+                dst[s * 2] = src[s * channels + lc];
+                dst[s * 2 + 1] = src[s * channels + lc + 1];
+            }
+        } else {
+            memcpy(out + (size_t)produced * channels,
+                   p->pcm + (size_t)off * channels,
+                   (size_t)take * channels * sizeof(int16_t));
+        }
         p->cursor += take;
         produced += take;
     }
@@ -382,7 +397,13 @@ static void reopen_device_locked(Player *p)
     memset(p->slot_busy, 0, sizeof p->slot_busy);
     p->finish_pending = 0;
 
-    MMRESULT r = audio_open(&p->audio, (uint16_t)p->brstm.info.channels,
+    /* A selected pair outputs plain stereo: open the device as stereo so
+     * every backend plays that pair only; the native/fold multichannel path
+     * is kept for the mix-all mode. */
+    uint16_t dev_ch = p->channel_pair >= 0
+                    ? (uint16_t)2
+                    : (uint16_t)p->brstm.info.channels;
+    MMRESULT r = audio_open(&p->audio, dev_ch,
                             current_device_rate(p), PLAYER_SLOT_FRAMES,
                             p->done_event);
     p->audio_error = r;
@@ -453,6 +474,7 @@ Player *player_create(int enable_audio)
     p->headless = !enable_audio;
     p->state = PLAYER_STOPPED;
     p->speed_ppm = PLAYER_SPEED_SCALE;
+    p->channel_pair = -1;
     p->buf_block = PLAYER_BLOCK_NONE;
     p->prev_block = PLAYER_BLOCK_NONE;
     p->carried_block = PLAYER_BLOCK_NONE;
@@ -566,6 +588,7 @@ int player_open(Player *p, const char *path, char *err, size_t errlen)
     p->audio_error = 0;
     p->decode_failed = 0;
     p->finish_pending = 0;
+    p->channel_pair = -1; /* every file starts mixing all channels */
     p->loop_enabled = info->loop != 0;
     p->loop_block = brstm_block_for_sample(&p->brstm, info->loop_start);
     p->have_loop_state = 0;
@@ -588,6 +611,7 @@ void player_close(Player *p)
     }
     p->state = PLAYER_STOPPED;
     p->position = 0;
+    p->channel_pair = -1;
     unlock(p);
     wake_engine(p);
 }
@@ -720,6 +744,34 @@ void player_set_loop(Player *p, int enabled)
     wake_engine(p);
 }
 
+int player_set_channel_pair(Player *p, int pair)
+{
+    lock(p);
+    if (!p->file_open) {
+        unlock(p);
+        return -1;
+    }
+    if (pair != -1) {
+        uint32_t channels = p->brstm.info.channels;
+        if (pair < 0 || channels < 4
+            || (uint32_t)(pair * 2 + 1) >= channels) {
+            unlock(p);
+            return -1;
+        }
+    }
+    if (pair != p->channel_pair) {
+        p->channel_pair = pair;
+        /* Reopen while audible so the new output takes effect now: the
+         * device comes back as stereo for a pair, as before for the mix. */
+        if (!p->headless
+            && (p->state == PLAYER_PLAYING || p->state == PLAYER_PAUSED))
+            reopen_device_locked(p);
+    }
+    unlock(p);
+    wake_engine(p);
+    return 0;
+}
+
 PlayerSnapshot player_get_state(Player *p)
 {
     PlayerSnapshot s;
@@ -733,12 +785,16 @@ PlayerSnapshot player_get_state(Player *p)
     s.audio_active = p->audio.open;
     s.audio_folded = p->audio.folded;
     s.loop_enabled = p->loop_enabled;
+    s.pair_sel = p->channel_pair;
     s.decode_failed = p->decode_failed;
     if (p->file_open) {
         const BrstmInfo *info = &p->brstm.info;
         s.total_samples = info->total_samples;
         s.sample_rate = info->sample_rate;
         s.channels = info->channels;
+        s.pair_count = info->channels >= 4 ? info->channels / 2 : 0;
+        if (s.pair_sel >= (int32_t)s.pair_count)
+            s.pair_sel = -1; /* defensive: never report a missing pair */
         s.file_loop = info->loop != 0;
         s.loop_start = info->loop_start;
         s.device_rate = current_device_rate(p);

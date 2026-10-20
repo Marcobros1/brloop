@@ -59,6 +59,8 @@ typedef struct {
     int      audio_active;   /* device is open */
     uint32_t audio_error;    /* waveOut error code, 0 = none */
     int      audio_folded;   /* device rejected >2ch: playing stereo fold */
+    uint32_t pair_count;     /* selectable channel pairs (0 = stereo file) */
+    int32_t  pair_sel;       /* -1 = all channels mixed, else pair index */
     int      decode_failed;  /* block read/decode failed; playback stopped */
 } PlayerSnapshot;
 
@@ -84,6 +86,17 @@ int player_stop(Player *p);
 
 void player_set_speed(Player *p, uint32_t speed_ppm);
 void player_set_loop(Player *p, int enabled);
+
+/* Select which stereo channel pair is played on multichannel files (pair
+ * index p renders source channels 2p and 2p+1, -1 mixes every channel as
+ * before). Each pair is one complete version of the music: the file's own
+ * HEAD track table defines track i as channels 2i/2i+1 (validated on the
+ * 19 multichannel collection files, INFORME_MULTICANAL.md), and Mario Kart
+ * Wii plays one track at a time depending on the track zone. Selection is
+ * available on files with >= 4 channels; while audio is playing the device
+ * is reopened so the change is immediate (same path as a speed change).
+ * Returns 0, or -1 if no file is open or the pair is out of range. */
+int player_set_channel_pair(Player *p, int pair);
 
 /* Jump to a source-sample position in [0, total_samples]. Works in any
  * state; while audio is playing the queued buffers are dropped so the new

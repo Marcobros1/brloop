@@ -34,6 +34,7 @@
 #define IDC_CHECK_LOOP   1008
 #define IDC_BTN_SPD100   1010
 #define IDC_BTN_FLSM     1011
+#define IDC_BTN_PAIR     1012
 #define IDC_PROGRESS     1014
 #define IDC_VAL_STATE    1015
 #define IDC_VAL_TIME     1016
@@ -57,6 +58,7 @@
 #define IDC_CAP_LOOP     1035
 #define IDC_CAP_LOOPST   1036
 #define IDC_CAP_PATH     1037
+#define IDC_CAP_VER      1038
 
 #define TIMER_UI 1
 #define UI_TICK_MS 100
@@ -76,11 +78,11 @@ typedef struct {
     HWND groupLib, groupInfo, groupPlay, groupSpeed;
     HWND btnOpen, btnRemove, btnClear;
     HWND btnPlay, btnPause, btnStop;
-    HWND btnSpd100, btnFlsm;
+    HWND btnSpd100, btnFlsm, btnPair;
     HWND checkLoop, progress;
     HWND capName, capCh, capRate, capDur, capSamples, capLoop, capLoopSt;
     HWND capLoopEnd;
-    HWND capPath;
+    HWND capPath, capVer;
     HWND valName, valPath, valRate, valCh, valSamples, valDur;
     HWND valLoop, valLoopSt, valState, valTime, valSpeed, valDevRate;
     HWND valLoopEnd;
@@ -655,7 +657,7 @@ static void layout(void)
     int cw, ch;
     int m = 12, g = 10, statusH = 24;
     int leftW, rightX, rightW;
-    int infoH = 154, playH = 110, speedH = 100;
+    int infoH = 178, playH = 110, speedH = 100;
     int x0, col2, y;
 
     if (!g_hwnd)
@@ -707,6 +709,9 @@ static void layout(void)
     move_ctl(g_ctl.capLoopEnd, col2, y, 74, 18);
     move_ctl(g_ctl.valLoopEnd, col2 + 78, y, rightW - (col2 - rightX) - 90,
              18);
+    y += 24;
+    move_ctl(g_ctl.capVer, x0, y, 84, 18);
+    move_ctl(g_ctl.btnPair, x0 + 88, y - 2, rightW - 104, 22);
     y += 26;
     move_ctl(g_ctl.capPath, x0, y, 84, 18);
     move_ctl(g_ctl.valPath, x0 + 88, y, rightW - 104, 20);
@@ -826,6 +831,10 @@ static void create_controls(HWND parent)
                                IDC_VAL_LOOPST, 0, 0, 0, 0);
     g_ctl.valLoopEnd = make_ctl(parent, 0, L"STATIC", L"No disponible", 0,
                                 IDC_VAL_LOOPEND, 0, 0, 0, 0);
+    g_ctl.capVer = make_ctl(parent, 0, L"STATIC", L"Versión:", 0,
+                            IDC_CAP_VER, 0, 0, 0, 0);
+    g_ctl.btnPair = make_ctl(parent, 0, L"BUTTON", L"—", 0,
+                             IDC_BTN_PAIR, 0, 0, 0, 0);
 
     g_ctl.groupPlay = make_ctl(parent, 0, L"BUTTON", L"Reproducción",
                                BS_GROUPBOX, 0, 0, 0, 0, 0);
@@ -870,6 +879,7 @@ static void create_controls(HWND parent)
     EnableWindow(g_ctl.btnRemove, FALSE);
     EnableWindow(g_ctl.btnClear, FALSE);
     EnableWindow(g_ctl.checkLoop, FALSE);
+    EnableWindow(g_ctl.btnPair, FALSE);
 }
 
 /* ----------------------------------------------------------------- UI --- */
@@ -929,13 +939,34 @@ static void update_ui(void)
     EnableWindow(g_ctl.btnRemove, g_rowCount > 0);
     EnableWindow(g_ctl.btnClear, g_rowCount > 0);
 
+    /* Version button: its caption is the current selection. */
+    {
+        wchar_t pairText[64], cur[64];
+        const wchar_t *want;
+        if (s.channels == 0) {
+            want = L"—";
+        } else if (s.pair_count == 0) {
+            want = L"Estéreo";
+        } else if (s.pair_sel < 0) {
+            want = L"Todas (mezcla)";
+        } else {
+            swprintf(pairText, 64, L"Versión %d · canales %d-%d",
+                     s.pair_sel + 1, s.pair_sel * 2 + 1, s.pair_sel * 2 + 2);
+            want = pairText;
+        }
+        GetWindowTextW(g_ctl.btnPair, cur, 64);
+        if (wcscmp(cur, want) != 0)
+            SetWindowTextW(g_ctl.btnPair, want);
+        EnableWindow(g_ctl.btnPair, s.pair_count > 0);
+    }
+
     if (s.file_loop)
         SendMessageW(g_ctl.checkLoop, BM_SETCHECK,
                      s.loop_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
 
     devRate = s.sample_rate ? (double)s.device_rate : 0.0;
     if (s.sample_rate) {
-        if (s.audio_folded)
+        if (s.audio_folded || s.pair_sel >= 0)
             swprintf(buf, 160, L"Dispositivo: %u Hz · estéreo",
                      s.device_rate);
         else
@@ -1024,6 +1055,29 @@ static void on_command(int id)
     case IDC_BTN_FLSM:
         apply_speed(PLAYER_FLSM_SPEED_PPM);
         break;
+    case IDC_BTN_PAIR: {
+        PlayerSnapshot s = player_get_state(g_player);
+        wchar_t msg[80];
+        int next;
+        if (s.pair_count == 0)
+            break;
+        if (s.pair_sel < 0)
+            next = 0;
+        else if (s.pair_sel + 1 < (int)s.pair_count)
+            next = s.pair_sel + 1;
+        else
+            next = -1;
+        if (player_set_channel_pair(g_player, next) != 0)
+            break;
+        if (next < 0)
+            set_status(L"Mezclando todos los canales.");
+        else {
+            swprintf(msg, 80, L"Versión %d: canales %d-%d.",
+                     next + 1, next * 2 + 1, next * 2 + 2);
+            set_status(msg);
+        }
+        break;
+    }
     default:
         break;
     }
@@ -1048,7 +1102,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_GETMINMAXINFO: {
         MINMAXINFO *mm = (MINMAXINFO *)lp;
         mm->ptMinTrackSize.x = 760;
-        mm->ptMinTrackSize.y = 480;
+        mm->ptMinTrackSize.y = 504;
         return 0;
     }
 
@@ -1267,6 +1321,52 @@ static int run_selftest(void)
     st_check(wait_state(PLAYER_STOPPED, 2000),
              "switching track while playing stops playback");
     st_check(g_selected == 1, "second track selected");
+
+    /* Version (channel pair) selection on the 4-channel second track. */
+    {
+        PlayerSnapshot s = player_get_state(g_player);
+        st_check(s.channels == 4 && s.pair_count == 2,
+                 "4-channel file exposes 2 channel pairs");
+        send_cmd(IDC_BTN_PAIR);
+        pump(50);
+        s = player_get_state(g_player);
+        st_check(s.pair_sel == 0, "version button selects pair 1");
+        send_cmd(IDC_BTN_PAIR);
+        pump(50);
+        s = player_get_state(g_player);
+        st_check(s.pair_sel == 1, "second press selects pair 2");
+        {
+            wchar_t cap[64] = L"";
+            GetWindowTextW(g_ctl.btnPair, cap, 64);
+            st_check(wcsstr(cap, L"Versión 2") != NULL,
+                     "button caption shows the selected version");
+        }
+        send_cmd(IDC_BTN_PAIR);
+        pump(50);
+        s = player_get_state(g_player);
+        st_check(s.pair_sel == -1, "third press returns to all channels");
+
+        /* Live switch: a version is chosen while audio is playing. */
+        send_cmd(IDC_BTN_PAIR);
+        pump(50); /* pair 1 selected */
+        send_cmd(IDC_BTN_PLAY);
+        st_check(wait_state(PLAYER_PLAYING, 4000),
+                 "play with a version selected");
+        send_cmd(IDC_BTN_PAIR);
+        pump(150); /* pair 2 selected */
+        s = player_get_state(g_player);
+        st_check(s.state == PLAYER_PLAYING && s.pair_sel == 1,
+                 "version switches live while playing");
+        send_cmd(IDC_BTN_PAIR);
+        pump(150); /* back to all channels */
+        s = player_get_state(g_player);
+        st_check(s.state == PLAYER_PLAYING && s.pair_sel == -1
+                 && s.audio_error == 0,
+                 "mix-all restored live without audio errors");
+        send_cmd(IDC_BTN_STOP);
+        st_check(wait_state(PLAYER_STOPPED, 2000),
+                 "stop after the version checks");
+    }
 
     /* Open/play/stop cycles must not leak handles or memory. */
     for (i = 0; i < 3; i++) {

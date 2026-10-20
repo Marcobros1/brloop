@@ -777,6 +777,170 @@ static void test_seek(void)
     player_destroy(p);
 }
 
+static void test_channel_pair(void)
+{
+    /* A selected channel pair must render exactly that stereo pair; the
+     * default keeps emitting every source channel (fold happens later, at
+     * write time). Runs headless, so the check is bit-exact. */
+    Player *p;
+    char path[600], err[512];
+    PlayerSnapshot s;
+    uint32_t total, ch, ref_len, got, i, t;
+    int16_t *ref;
+
+    note("== channel pairs (version selection on multichannel files) ==");
+    p = player_create(0);
+    if (!p) {
+        check(0, "headless player created");
+        return;
+    }
+    check(player_set_channel_pair(p, 0) == -1,
+          "pair selection without a file returns -1");
+
+    col_path(k_short, path, sizeof path);
+    err[0] = '\0';
+    if (player_open(p, path, err, sizeof err) != 0) {
+        check(0, "open %s: %s", k_short, err);
+        player_destroy(p);
+        return;
+    }
+    s = player_get_state(p);
+    ch = s.channels;
+    total = (uint32_t)s.total_samples;
+    check(ch == 4 && s.pair_count == 2 && s.pair_sel == -1,
+          "4ch file: pair_count=2, default mix-all (ch=%u count=%u sel=%d)",
+          ch, s.pair_count, s.pair_sel);
+    check(player_set_channel_pair(p, 0) == 0, "pair 1 accepted");
+    check(player_get_state(p).pair_sel == 0, "snapshot reports pair 1");
+    check(player_set_channel_pair(p, 2) == -1, "pair 3 rejected on 4 channels");
+    check(player_set_channel_pair(p, -2) == -1, "-2 rejected");
+    check(player_set_channel_pair(p, -1) == 0,
+          "mix-all restored for the reference pass");
+
+    /* Linear reference pass (loop off) over every source channel. */
+    player_set_loop(p, 0);
+    ref = (int16_t *)malloc((size_t)total * ch * sizeof(int16_t));
+    if (!ref) {
+        check(0, "reference buffer allocated for %u frames", total);
+        player_close(p);
+        player_destroy(p);
+        return;
+    }
+    check(player_play(p) == 0, "linear pass starts");
+    ref_len = 0;
+    while (ref_len < total) {
+        got = player_render(p, g_chunk, 4096);
+        if (got == 0)
+            break;
+        memcpy(ref + (size_t)ref_len * ch, g_chunk,
+               (size_t)got * ch * sizeof(int16_t));
+        ref_len += got;
+    }
+    check(ref_len == total, "linear pass covers the file (%u frames)",
+          ref_len);
+    (void)player_render(p, g_chunk, 16); /* drives the end-of-stream state */
+
+    /* Default output equals every source channel. */
+    check(player_play(p) == 0, "play after the reference pass");
+    got = player_render(p, g_chunk, 4096);
+    check(got == 4096 && memcmp(g_chunk, ref, (size_t)4096 * ch * 2) == 0,
+          "default render matches all source channels");
+    (void)player_stop(p);
+
+    /* Each pair renders its own channels as plain stereo. */
+    for (t = 0; t < 2; t++) {
+        int ok = 1;
+        check(player_set_channel_pair(p, (int)t) == 0, "select pair %u", t);
+        check(player_get_state(p).pair_sel == (int32_t)t,
+              "snapshot reports pair %u", t);
+        check(player_play(p) == 0, "play with pair %u", t);
+        got = player_render(p, g_chunk, 4096);
+        for (i = 0; i < got; i++) {
+            if (g_chunk[i * 2] != ref[i * ch + t * 2]
+                || g_chunk[i * 2 + 1] != ref[i * ch + t * 2 + 1]) {
+                ok = 0;
+                break;
+            }
+        }
+        check(got == 4096 && ok, "pair %u render equals channels %u+%u",
+              t, t * 2, t * 2 + 1);
+        (void)player_stop(p);
+    }
+
+    /* Back to mix-all: the full source channel set comes back. */
+    check(player_set_channel_pair(p, -1) == 0, "mix-all restored");
+    check(player_play(p) == 0, "play after restore");
+    got = player_render(p, g_chunk, 4096);
+    check(got == 4096 && memcmp(g_chunk, ref, (size_t)4096 * ch * 2) == 0,
+          "render matches all source channels after restore");
+    (void)player_stop(p);
+
+    /* A seek with a pair active stays aligned to the reference. */
+    check(player_set_channel_pair(p, 1) == 0, "pair 2 selected for the seek");
+    t = 500000u;
+    check(player_seek(p, t) == 0, "seek(%u) with a pair selected", t);
+    check(player_play(p) == 0, "play after seek");
+    got = player_render(p, g_chunk, 1024);
+    {
+        int ok = 1;
+        for (i = 0; i < got; i++) {
+            if (g_chunk[i * 2] != ref[(t + i) * ch + 2]
+                || g_chunk[i * 2 + 1] != ref[(t + i) * ch + 3]) {
+                ok = 0;
+                break;
+            }
+        }
+        check(got == 1024 && ok, "seek + pair 2 renders at the target");
+    }
+    free(ref);
+    player_close(p);
+    player_destroy(p);
+
+    /* Pair availability scales with the channel count. */
+    p = player_create(0);
+    if (!p) {
+        check(0, "headless player created (8ch)");
+        return;
+    }
+    col_path("STRM_N_KOOPA_N.brstm", path, sizeof path);
+    err[0] = '\0';
+    if (player_open(p, path, err, sizeof err) != 0) {
+        check(0, "open STRM_N_KOOPA_N.brstm: %s", err);
+        player_destroy(p);
+        return;
+    }
+    s = player_get_state(p);
+    check(s.channels == 8 && s.pair_count == 4 && s.pair_sel == -1,
+          "8ch file: pair_count=4 (ch=%u count=%u sel=%d)",
+          s.channels, s.pair_count, s.pair_sel);
+    check(player_set_channel_pair(p, 3) == 0, "pair 4 accepted on 8 channels");
+    check(player_set_channel_pair(p, 4) == -1, "pair 5 rejected on 8 channels");
+    check(player_set_channel_pair(p, -1) == 0, "mix-all accepted");
+    player_close(p);
+    player_destroy(p);
+
+    /* Stereo files expose no pairs. */
+    p = player_create(0);
+    if (!p) {
+        check(0, "headless player created (stereo)");
+        return;
+    }
+    col_path("tKD_N.brstm", path, sizeof path);
+    err[0] = '\0';
+    if (player_open(p, path, err, sizeof err) != 0) {
+        check(0, "open tKD_N.brstm: %s", err);
+        player_destroy(p);
+        return;
+    }
+    s = player_get_state(p);
+    check(s.pair_count == 0, "stereo file exposes no pairs");
+    check(player_set_channel_pair(p, 0) == -1,
+          "pair selection rejected on a stereo file");
+    check(player_set_channel_pair(p, -1) == 0, "mix-all still accepted");
+    player_close(p);
+    player_destroy(p);
+}
+
 static void test_memory(void)
 {
     Player *p;
@@ -1430,7 +1594,7 @@ int main(int argc, char **argv)
                 "usage: player_tests --collection <dir> --invalid <dir> "
                 "--vgmstream <test.exe> --work <dir> "
                 "[--report <file>] [--only <group>]\n"
-                "groups: metadata speed invalid loop noloop loopoff seek "
+                "groups: metadata speed invalid loop noloop loopoff seek pair "
                 "memory th probe ta realtime\n");
         return 2;
     }
@@ -1457,6 +1621,7 @@ int main(int argc, char **argv)
     RUN("noloop", test_no_loop_end);
     RUN("loopoff", test_loop_off_looped);
     RUN("seek", test_seek);
+    RUN("pair", test_channel_pair);
     RUN("memory", test_memory);
     RUN("th", test_transport_headless);
     RUN("probe", test_resource_probe);
