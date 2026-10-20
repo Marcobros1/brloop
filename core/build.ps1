@@ -1,6 +1,7 @@
 # Builds the Metal Kart Wii core library tools with MSVC (cl.exe).
 # Usage: powershell -ExecutionPolicy Bypass -File core\build.ps1
-# Output: core\build\brstm_info.exe, core\build\brstm_decode.exe
+# Output: core\build\brstm_info.exe, core\build\brstm_decode.exe,
+#         core\build\brstm_channels.exe
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -43,6 +44,8 @@ $lines = @(
     ($common + ' "' + (Join-Path $root 'tools\brstm_info.c') + '" /Fe:brstm_info.exe'),
     ('if errorlevel 1 exit /b 1'),
     ($common + ' "' + (Join-Path $root 'tools\brstm_decode.c') + '" /Fe:brstm_decode.exe'),
+    ('if errorlevel 1 exit /b 1'),
+    ($common + ' "' + (Join-Path $root 'tools\brstm_channels.c') + '" /Fe:brstm_channels.exe'),
     ('if errorlevel 1 exit /b 1')
 )
 $bat = Join-Path $build 'build.bat'
@@ -54,4 +57,4 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 Remove-Item -Path $bat -Force
-Write-Host "Built: $build\brstm_info.exe, $build\brstm_decode.exe"
+Write-Host "Built: $build\brstm_info.exe, $build\brstm_decode.exe, $build\brstm_channels.exe"
