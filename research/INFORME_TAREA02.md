@@ -237,3 +237,11 @@ En la UI, tras la entrega de T2 y a petición del usuario:
   en todo el rango (grupo `seek`, 31 checks, incluido el wrap tras saltar
   cerca del final). En detenido, «Reproducir» continúa desde el punto
   buscado; «Detener» sigue volviendo a 0. Autotest de la UI a 20 checks.
+- **Selección de versión (multicanal)**: nueva fila «Versión:» con un botón que
+  cicla `Todas (mezcla) → Versión N · canales …` en ficheros con ≥4 canales; el
+  motor reproduce solo el par estéreo elegido (bit exacto) y, si hay audio
+  sonando, reaplica el dispositivo en vivo. El plegado par→L/impar→R de la §5
+  pasa a ser únicamente el modo «Todas (mezcla)» (por defecto, sin cambios en
+  T2). Autotest de la UI a **29 checks** y batería a **185** (grupo `pair`).
+  Investigación del significado de los canales y pruebas: ver
+  `research/INFORME_MULTICANAL.md`.
