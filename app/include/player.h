@@ -31,21 +31,26 @@
 extern "C" {
 #endif
 
+/* ppm scale: 1e6 = 1.0x, so speeds are integer ratios with no float drift.
+ * The FLSM value is the measured factor from T0 (44100 -> 47104 exactly);
+ * see the header comment for why it is an observed bound, not a constant. */
 #define PLAYER_SPEED_SCALE 1000000u
 #define PLAYER_FLSM_SPEED_PPM 1068120u /* observed FLSM factor 1.06812 */
 
 typedef enum {
-    PLAYER_STOPPED = 0,
+    PLAYER_STOPPED = 0,  /* no device, cursor at start (after stop/reset) */
     PLAYER_PLAYING,
-    PLAYER_PAUSED,
-    PLAYER_FINISHED
+    PLAYER_PAUSED,       /* device held; cursor and queue kept */
+    PLAYER_FINISHED      /* total reached, loop off, queue drained */
 } PlayerState;
 
 typedef struct Player Player;
 
 typedef struct {
     PlayerState state;
-    uint64_t position;       /* source samples already produced for output */
+    uint64_t position;       /* source samples already HEARD (harvested
+                              * slots), not merely decoded - see
+                              * player_get_state for the idle/headless rule */
     uint64_t total_samples;
     uint32_t sample_rate;    /* base rate declared by the file */
     uint32_t channels;
@@ -109,6 +114,9 @@ int player_set_channel_pair(Player *p, int pair);
  * is open or the re-decode fails (decode_failed is set). */
 int player_seek(Player *p, uint64_t frame);
 
+/* Consistent copy of every field the UI shows (position, state, rates,
+ * loop, pair selection, errors) under one lock; safe to call from any
+ * thread at any time. */
 PlayerSnapshot player_get_state(Player *p);
 
 /* Produce up to `frames` interleaved PCM16 frames, advancing the position

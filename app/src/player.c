@@ -87,21 +87,34 @@ struct Player {
     volatile LONG thread_exit;
 };
 
+/* Acquire/release the single player lock. Kept as functions (not macros)
+ * so lock ordering is grep-able and future code cannot silently inline a
+ * different lock. */
 static void lock(Player *p) { EnterCriticalSection(&p->cs); }
 static void unlock(Player *p) { LeaveCriticalSection(&p->cs); }
 
+/* Nudge the engine to re-examine state after a UI mutation. The event is
+ * auto-reset, so signaling without a waiter just leaves it signaled - the
+ * wake is never lost (see header comment on the threading model). */
 static void wake_engine(Player *p)
 {
     if (p->cmd_event)
         SetEvent(p->cmd_event);
 }
 
+/* ppm -> device sample rate (truncated, same as FLSM's field rewrite).
+ * Exposed so tests and UI can predict the device rate without duplicating
+ * the formula; truncation (not rounding) matches the observed FLSM output
+ * for 44100/48000 (see MEMORY.md speed decision). */
 uint32_t player_device_rate(uint32_t sample_rate, uint32_t speed_ppm)
 {
     return (uint32_t)(((uint64_t)sample_rate * speed_ppm)
                       / PLAYER_SPEED_SCALE);
 }
 
+/* device_rate with the ppm clamp applied: the speed actually in force,
+ * derived from the stored value (UI can only set 1.0x/Final Lap today, but
+ * set_speed accepts any value in range, so the clamp lives here too). */
 static uint32_t current_device_rate(const Player *p)
 {
     uint32_t ppm = p->speed_ppm;
@@ -313,6 +326,10 @@ static uint32_t render_locked(Player *p, int16_t *out, uint32_t frames)
     return produced;
 }
 
+/* Publish the slot as done and advance the audible position past it.
+ * Positions come from queued slots (what has been heard), never from the
+ * cursor (what has been produced) - that difference is the whole point of
+ * having a separate position. Caller holds the lock. */
 static void harvest_slots_locked(Player *p)
 {
     for (uint32_t i = 0; i < AUDIO_OUT_SLOTS; i++) {
@@ -325,6 +342,8 @@ static void harvest_slots_locked(Player *p)
     }
 }
 
+/* True while any queued slot is still audible (used by finish_check and
+ * by tests to know the queue drained). */
 static int any_slot_busy(const Player *p)
 {
     for (uint32_t i = 0; i < AUDIO_OUT_SLOTS; i++)
@@ -333,6 +352,11 @@ static int any_slot_busy(const Player *p)
     return 0;
 }
 
+/* Queue one 512-frame slot per free slot so the device never starves.
+ * `src` is captured *before* rendering because render_locked advances the
+ * cursor; slot_src then maps a finished slot back to its start position.
+ * An empty render either means end-of-stream (finish_pending) or a
+ * non-sequential jump render could not serve (silent stop, no error). */
 static void fill_slots_locked(Player *p)
 {
     if (p->state != PLAYER_PLAYING || !p->audio.open)
@@ -420,6 +444,8 @@ static void reopen_device_locked(Player *p)
         audio_pause(&p->audio, 1);
 }
 
+/* Device teardown without reopening: drops queued audio (position bookkeeping
+ * in slot_busy/finish_pending resets with it). Caller holds the lock. */
 static void close_device_locked(Player *p)
 {
     if (p->audio.open)
@@ -428,6 +454,13 @@ static void close_device_locked(Player *p)
     p->finish_pending = 0;
 }
 
+/* Engine thread: sleep on stop/command/buffer-done, then pump the queue.
+ * The wait set is rebuilt under the lock every iteration so a device that
+ * opened or closed between iterations is never waited on stale; after the
+ * wait, the lock is retaken before touching state (the window where a UI
+ * command signals cmd_event is covered by the auto-reset event staying
+ * signaled, per the header comment). Exit only via stop_event or
+ * thread_exit - both set by player_destroy. */
 static DWORD WINAPI engine_thread(void *arg)
 {
     Player *p = (Player *)arg;
@@ -466,6 +499,10 @@ static DWORD WINAPI engine_thread(void *arg)
     return 0;
 }
 
+/* Allocate the player, its lock and (unless headless) the engine thread.
+ * Headless mode is the test path: same decode/loop/seek logic with no audio
+ * device, driven directly through player_render. Every failure path runs
+ * player_destroy so a half-built object never leaks. */
 Player *player_create(int enable_audio)
 {
     Player *p = (Player *)calloc(1, sizeof *p);
@@ -505,6 +542,10 @@ Player *player_create(int enable_audio)
     return p;
 }
 
+/* Stop the engine thread first (it may hold buffers we are about to free),
+ * then close device/file, then release everything. The 5 s join timeout is
+ * only a last-resort against a wedged winmm call; the thread has no path
+ * that blocks on the UI, so it exits promptly in practice. */
 void player_destroy(Player *p)
 {
     if (!p)
@@ -539,6 +580,12 @@ void player_destroy(Player *p)
     free(p);
 }
 
+/* Open a new file: shut down whatever played, parse into a temporary Brstm
+ * and only then swap it in, so a rejected file leaves the previous state
+ * untouched apart from being closed (buffers are allocated before the swap
+ * for the same reason: no error path can leave a dangling Brstm in *p).
+ * Resets all runtime state; the device is reopened to match channel count
+ * and rate. Returns a BrstmStatus on parse failure, -1 on OOM. */
 int player_open(Player *p, const char *path, char *err, size_t errlen)
 {
     lock(p);
@@ -601,6 +648,9 @@ int player_open(Player *p, const char *path, char *err, size_t errlen)
     return 0;
 }
 
+/* Close file and device but keep the Player reusable (UI calls this when
+ * the library changes selection); pair resets to -1 because it is a
+ * per-file property. */
 void player_close(Player *p)
 {
     lock(p);
@@ -616,6 +666,10 @@ void player_close(Player *p)
     wake_engine(p);
 }
 
+/* Start or resume. From PAUSED it just unpauses the device (position kept);
+ * from STOPPED/FINISHED it reopens the device and starts at the current
+ * position, which is 0 after a plain stop but a seek target if the user
+ * seeked while stopped - that behavior is covered by the test battery. */
 int player_play(Player *p)
 {
     int rc = -1;
@@ -654,6 +708,8 @@ int player_play(Player *p)
     return rc;
 }
 
+/* Pause: hold the device and the state; decode cursor and queue stay as
+ * they are, so resume continues sample-exact (unlike stop, which resets). */
 int player_pause(Player *p)
 {
     lock(p);
@@ -667,6 +723,9 @@ int player_pause(Player *p)
     return 0;
 }
 
+/* Stop: drop queued audio, rewind the decoder to sample 0 and zero the
+ * position (distinction from pause is the contract the UI relies on).
+ * decode_failed clears too so a retry after stop is allowed to play. */
 int player_stop(Player *p)
 {
     lock(p);
@@ -682,6 +741,12 @@ int player_stop(Player *p)
     return 0;
 }
 
+/* Seek: rebuild the decoder state at the target (seek_decode_to_locked,
+ * which can walk from the loop anchor or restart from block 0), then reopen
+ * the device so queued audio from the old position is discarded. When not
+ * playing, the cursor alone is kept as the future start position - reopening
+ * is deferred to player_play. FINISHED degrades to STOPPED on success so a
+ * subsequent play starts from the seek target. */
 int player_seek(Player *p, uint64_t frame)
 {
     int rc = -1;
@@ -721,6 +786,10 @@ int player_seek(Player *p, uint64_t frame)
     return rc;
 }
 
+/* Change speed (ppm of 1e6). Clamped to [0.25x, 4x]; if audible, the
+ * device is reopened at the new rate, which resumes from the first buffer
+ * not yet heard - position and loop bounds survive because reopen_device_
+ * locked rewinds the cursor to that point instead of restarting. */
 void player_set_speed(Player *p, uint32_t speed_ppm)
 {
     lock(p);
@@ -736,6 +805,9 @@ void player_set_speed(Player *p, uint32_t speed_ppm)
     wake_engine(p);
 }
 
+/* Loop on/off at runtime. No device reopen: the loop check happens in
+ * render_locked per sample batch, so toggling takes effect on the next
+ * fill - including while paused (applied when playback resumes). */
 void player_set_loop(Player *p, int enabled)
 {
     lock(p);
@@ -744,6 +816,12 @@ void player_set_loop(Player *p, int enabled)
     wake_engine(p);
 }
 
+/* Select the source stereo pair to play: -1 = mix every channel (the
+ * default and the only legal value for <4-channel files), otherwise pair p
+ * plays source channels 2p/2p+1 as plain stereo. Out-of-range selections
+ * are rejected (-1 returned) instead of clamped, so a stale UI action can
+ * never silently pick a different pair than the one shown. Like speed, a
+ * live change reopens the device so it takes effect immediately. */
 int player_set_channel_pair(Player *p, int pair)
 {
     lock(p);
@@ -772,6 +850,13 @@ int player_set_channel_pair(Player *p, int pair)
     return 0;
 }
 
+/* Atomic snapshot for the UI/tests: one lock acquisition, then plain copy.
+ * Position rule: while audio is active, use the harvested slot position
+ * (what has been *heard*); otherwise the decode cursor (headless or idle) -
+ * the two differ by up to the queued audio, and the UI progress bar must
+ * show what the listener heard, not what was decoded ahead. Slots are
+ * harvested first so the answer is current. pair_count reports 0 for
+ * <4-channel files, which the UI uses to disable the pair button. */
 PlayerSnapshot player_get_state(Player *p)
 {
     PlayerSnapshot s;
@@ -812,6 +897,10 @@ PlayerSnapshot player_get_state(Player *p)
     return s;
 }
 
+/* Direct render path used by tests (headless): same render_locked as the
+ * engine thread uses with audio, plus the same end-of-stream detection - a
+ * zero-length render at total_samples with loop off transitions to FINISHED
+ * exactly like the queued path does via finish_check_locked. */
 uint32_t player_render(Player *p, int16_t *out, uint32_t frames)
 {
     uint32_t got = 0;

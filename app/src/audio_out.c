@@ -15,6 +15,8 @@ static struct {
 } g_rejected[AUDIO_REJECTED_MAX];
 static int g_rejected_count;
 
+/* Probe-or-skip: ask winmm only about (rate, channels) formats not already
+ * known to fail. Returns 1 when the native open should be skipped. */
 static int native_rejected(uint32_t rate, uint16_t channels)
 {
     int i;
@@ -24,6 +26,8 @@ static int native_rejected(uint32_t rate, uint16_t channels)
     return 0;
 }
 
+/* Record a format winmm rejected (bounds the cache silently past
+ * AUDIO_REJECTED_MAX: worst case a few extra failed probes, never growth). */
 static void remember_rejected(uint32_t rate, uint16_t channels)
 {
     if (native_rejected(rate, channels))
@@ -35,6 +39,12 @@ static void remember_rejected(uint32_t rate, uint16_t channels)
     }
 }
 
+/* Open the device in three steps: native format if known-good or untested;
+ * on a >2ch rejection, remember it and fall back to stereo + folded=1 (the
+ * source channels are then mixed at write time); if even stereo fails,
+ * return the error with open=0. Buffers are allocated last so any failure
+ * before that leaves no allocations behind (and audio_close is idempotent
+ * for the partial-open path). */
 MMRESULT audio_open(AudioOut *a, uint16_t channels, uint32_t rate,
                     uint32_t slot_frames, HANDLE done_event)
 {
@@ -105,6 +115,10 @@ MMRESULT audio_open(AudioOut *a, uint16_t channels, uint32_t rate,
     return MMSYSERR_NOERROR;
 }
 
+/* Reset (drop queued buffers), unprepare every header still flagged
+ * PREPARED (winmm requires unprepare before close), close the handle and
+ * free the data. Safe on a never-opened or half-open AudioOut - player.c
+ * calls it on every teardown path. */
 MMRESULT audio_close(AudioOut *a)
 {
     MMRESULT r = MMSYSERR_NOERROR;
@@ -126,6 +140,9 @@ MMRESULT audio_close(AudioOut *a)
     return r;
 }
 
+/* Pause/resume the device without touching the queue: queued buffers stay
+ * queued and resume from the same sample (this is why pause is cheap and
+ * position-preserving in player.c). */
 MMRESULT audio_pause(AudioOut *a, int pause)
 {
     if (!a->handle)
@@ -140,6 +157,9 @@ MMRESULT audio_reset(AudioOut *a)
     return waveOutReset(a->handle);
 }
 
+/* Fill one slot and hand it to the device: fold (when the device is
+ * stereo-folded) or straight copy, then prepare-once + write. Returns the
+ * winmm error directly; player.c treats any error as fatal for playback. */
 MMRESULT audio_write(AudioOut *a, uint32_t slot, const int16_t *pcm,
                      uint32_t frames)
 {
@@ -191,6 +211,10 @@ int audio_slot_free(const AudioOut *a, uint32_t slot)
         || (a->headers[slot].dwFlags & WHDR_DONE) != 0;
 }
 
+/* Device clock in samples since open. TIME_SAMPLES can be replaced by the
+ * driver with TIME_BYTES if unsupported, so only that wType is trusted;
+ * player.c currently uses slot bookkeeping instead and this remains the
+ * diagnostic/fallback path. */
 MMRESULT audio_position(const AudioOut *a, uint32_t *frames)
 {
     MMTIME t;

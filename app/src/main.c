@@ -88,27 +88,40 @@ typedef struct {
     HWND valLoopEnd;
 } Controls;
 
-static HWND g_hwnd;
-static Controls g_ctl;
-static HFONT g_font;
-static HBRUSH g_brushFace;
-static Player *g_player;
+/* ------------------------------------------------------------- app state --
+ * Win32 pattern: one instance of the whole UI lives in file-scope globals
+ * (single window, single player). Everything below is UI-thread-only, so no
+ * lock is needed here - the only cross-thread object is g_player, which has
+ * its own critical section. */
+static HWND g_hwnd;         /* main window; also passed to dialogs */
+static Controls g_ctl;      /* every child control handle, filled once */
+static HFONT g_font;        /* shared Segoe UI font for all controls */
+static HBRUSH g_brushFace;  /* group-box background brush */
+static Player *g_player;    /* engine; created in wWinMain, destroyed in
+                             * WM_DESTROY (so every exit path is covered by
+                             * the window lifetime) */
 
-static TrackRow *g_rows;
+static TrackRow *g_rows;    /* library array, grows by doubling */
 static int g_rowCount, g_rowCap;
-static int g_selected = -1;
+static int g_selected = -1; /* index into g_rows, -1 = nothing selected */
 
+/* Last snapshot polled from the player (100 ms timer). The UI never reads
+ * the player directly outside update_ui/select_track, so g_snap is the one
+ * place "what the UI believes" lives; command handlers that must not act on
+ * stale data re-query the player instead. */
 static PlayerSnapshot g_snap;
-static uint32_t g_last_reported_error;
-static int g_decode_reported;
+static uint32_t g_last_reported_error; /* audio_error already shown in status */
+static int g_decode_reported;          /* decode failure already shown once */
 
-/* Selftest bookkeeping. */
-static int g_stMode;
-static int g_stChecks, g_stFails;
-static FILE *g_stReport;
-static wchar_t g_stInvalid[1024];
+/* Selftest bookkeeping (--selftest). */
+static int g_stMode;             /* running as a scripted self-test */
+static int g_stChecks, g_stFails;/* counters for the final RESULT line */
+static FILE *g_stReport;         /* optional report file (see load_args) */
+static wchar_t g_stInvalid[1024];/* path of a file that must be rejected */
 static int g_hasInvalid;
 
+/* Heap copy of a wide string (the library owns every path/name it keeps;
+ * NULL on OOM, which callers turn into an error message). */
 static wchar_t *dup_wide(const wchar_t *s)
 {
     size_t n = wcslen(s) + 1;
@@ -128,6 +141,8 @@ static int narrow_path(const wchar_t *w, char *out, size_t outlen)
     return n > 0 && !used;
 }
 
+/* File name portion of a path, for display and error messages (handles both
+ * separator styles; no allocation, points into `path`). */
 static const wchar_t *file_name_of(const wchar_t *path)
 {
     const wchar_t *slash = wcsrchr(path, L'\\');
@@ -137,6 +152,8 @@ static const wchar_t *file_name_of(const wchar_t *path)
     return slash ? slash + 1 : path;
 }
 
+/* "0:00.000" or "1:23:04.567" (hours only when needed). Milliseconds are
+ * rounded, then split largest-first so the parts always add up. */
 static void format_time(wchar_t *out, size_t n, double sec)
 {
     int ms, h, m, s;
@@ -165,6 +182,8 @@ static void format_speed(wchar_t *out, size_t n, uint32_t ppm)
     swprintf(out, n, L"%u,%.*s×", whole, len, frac);
 }
 
+/* Status bar text: every user-visible message funnels through here so the
+ * selftest and the user see the same wording. */
 static void set_status(const wchar_t *text)
 {
     if (g_ctl.status)
@@ -173,6 +192,8 @@ static void set_status(const wchar_t *text)
 
 /* ------------------------------------------------------------ selftest -- */
 
+/* Record one check result: counters, stdout and report file stay in sync so
+ * a redirected run and an interactive one show the same results. */
 static void st_check(int ok, const char *name)
 {
     g_stChecks++;
@@ -191,6 +212,9 @@ static void st_check(int ok, const char *name)
         fflush(g_stReport);
 }
 
+/* Run the message loop for `ms` milliseconds. The selftest uses it instead
+ * of Sleep so window messages, timers and the engine callbacks keep being
+ * processed while waiting - a bare sleep would freeze the UI under test. */
 static void pump(DWORD ms)
 {
     DWORD deadline = GetTickCount() + ms;
@@ -204,6 +228,9 @@ static void pump(DWORD ms)
     } while (GetTickCount() < deadline);
 }
 
+/* Pump messages until the player reaches `want` or the timeout expires.
+ * Returns the final answer, so callers can assert on it (a timeout is a
+ * failed check, not a hang). */
 static int wait_state(PlayerState want, DWORD timeout_ms)
 {
     DWORD deadline = GetTickCount() + timeout_ms;
@@ -216,6 +243,9 @@ static int wait_state(PlayerState want, DWORD timeout_ms)
     return player_get_state(g_player).state == want;
 }
 
+/* Simulate a button click by sending the exact WM_COMMAND the control
+ * itself would send - the selftest therefore exercises the same
+ * on_command() path as a real click, not a private test entry point. */
 static void send_cmd(int id)
 {
     SendMessageW(g_hwnd, WM_COMMAND, MAKEWPARAM(id, BN_CLICKED), 0);
@@ -241,6 +271,8 @@ static void st_logf(const char *fmt, ...)
 
 /* ---------------------------------------------------------------- rows -- */
 
+/* Insert the list columns' values for one library row. Called once per row
+ * when added; column order must match create_controls(). */
 static void list_insert_row(int idx, const TrackRow *row)
 {
     LVITEMW it;
@@ -260,6 +292,8 @@ static void list_insert_row(int idx, const TrackRow *row)
     ListView_SetItemText(g_ctl.list, idx, 4, row->loop ? L"Sí" : L"No");
 }
 
+/* Info panel with nothing to show: placeholders + loop control disabled, so
+ * values from a previous track can never be mistaken for the new state. */
 static void clear_info_panel(void)
 {
     SetWindowTextW(g_ctl.valName, L"—");
@@ -274,6 +308,9 @@ static void clear_info_panel(void)
     EnableWindow(g_ctl.checkLoop, FALSE);
 }
 
+/* Fill the info panel from a fresh snapshot. Also syncs the loop checkbox
+ * with the engine (BM_SETCHECK here and in update_ui: the checkbox is
+ * driven state, not the source of truth - player_set_loop is). */
 static void fill_info_panel(const PlayerSnapshot *s)
 {
     wchar_t buf[128];
@@ -305,6 +342,11 @@ static void fill_info_panel(const PlayerSnapshot *s)
                  s->loop_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
 }
 
+/* Make `idx` the current track: stop/close the previous one, open the new
+ * path through the player and refresh the info panel. Any failure (ANSI
+ * path unrepresentable, invalid BRSTM) leaves the player closed and shows
+ * the reason in the status bar - the selection still moves so the user sees
+ * which row the message is about. */
 static void select_track(int idx)
 {
     TrackRow *row;
@@ -350,6 +392,11 @@ static void select_track(int idx)
     set_status(msg);
 }
 
+/* Validate a file with a full brstm_open and append it to the library.
+ * Validation happens here (not on selection) so bad files are rejected the
+ * moment they enter the list, with a specific message per file. The opened
+ * Brstm is only read for the metadata columns and closed immediately; the
+ * player opens it again on selection. Returns 0 or -1 with errbuf set. */
 static int add_track(const wchar_t *path, wchar_t *errbuf, size_t errlen)
 {
     char narrow[1024];
@@ -406,6 +453,9 @@ static int add_track(const wchar_t *path, wchar_t *errbuf, size_t errlen)
     return 0;
 }
 
+/* Remove row idx: shift the array, delete the list item and repair the
+ * selection. If the removed row was playing, playback stops; the next row
+ * (or none) becomes the selection, keeping g_selected always valid. */
 static void remove_track(int idx)
 {
     TrackRow *row;
@@ -434,6 +484,10 @@ static void remove_track(int idx)
     }
 }
 
+/* "Limpiar": stop playback, free every row's strings and empty the list.
+ * The g_rows buffer itself is kept (capacity reuse across clears; it is
+ * process-lifetime state like the rest of the globals and is reclaimed by
+ * the OS at exit). */
 static void remove_all(void)
 {
     player_stop(g_player);
@@ -451,6 +505,10 @@ static void remove_all(void)
 
 /* ----------------------------------------------------------- file open -- */
 
+/* File dialog (multi-select allowed). The OPENFILENAME buffer uses the
+ * documented two-part layout: dir\0 then file\0 file\0 ... \0 (single file
+ * = just the path). Every added file is validated by add_track; failures
+ * are reported once, with a count, instead of one box per file. */
 static void browse_files(void)
 {
     static wchar_t buf[65536];
@@ -538,6 +596,11 @@ static void update_ui(void);
 static int g_prog_drag;
 static int g_prog_drag_x;
 
+/* Map a click/drag x position to a source sample and seek there. The 1px
+ * frame on each side of the custom bar is excluded, and the ratio is done
+ * in 64-bit to avoid overflow on long files. Seeking while paused or
+ * stopped just moves the cursor (player.c contract), so this works in any
+ * state. */
 static void prog_seek_from_x(HWND hwnd, int x)
 {
     RECT rc;
@@ -557,6 +620,14 @@ static void prog_seek_from_x(HWND hwnd, int x)
         update_ui();
 }
 
+/* Custom progress bar window procedure:
+ *  - WM_PAINT: background, loop region shading, played fill, loop-start
+ *    marker and (while dragging) a temporary position line. All paint state
+ *    is the g_prog_* globals updated by update_ui on the UI thread.
+ *  - button messages: press starts a drag + immediate seek, move updates the
+ *    drag line, release seeks to the final x (drag-then-release matches how
+ *    a media slider behaves; a plain click already seeks on press).
+ * Capture keeps mouse messages coming to this control even outside it. */
 static LRESULT CALLBACK progress_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
@@ -644,6 +715,8 @@ static LRESULT CALLBACK progress_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
 /* -------------------------------------------------------------- layout -- */
 
+/* Absolute position/size of one control; no-op for a not-yet-created handle
+ * so layout() is safe to call before every control exists. */
 static void move_ctl(HWND h, int x, int y, int w, int hh)
 {
     if (h)
@@ -651,6 +724,12 @@ static void move_ctl(HWND h, int x, int y, int w, int hh)
                      SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
+/* Recompute every control position from the client size. Called on
+ * WM_SIZE and once after creation. Fixed pixel geometry (no auto-scale):
+ * the window enforces a 760x504 minimum in WM_GETMINMAXINFO, and the
+ * layout is simple enough that proportional scaling would add complexity
+ * without visible benefit at this stage. Left column = library (width
+ * clamped 330..440), right column = info / transport / speed panels. */
 static void layout(void)
 {
     RECT rc;
@@ -738,6 +817,9 @@ static void layout(void)
 
 /* ------------------------------------------------------------ creation -- */
 
+/* Create one child control with the shared font applied. The pattern
+ * (CreateWindowExW + WM_SETFONT) repeats for ~40 controls, hence the
+ * helper; `id` 0 = static/groupbox with no command traffic. */
 static HWND make_ctl(HWND parent, DWORD ex, const wchar_t *cls,
                      const wchar_t *text, DWORD style, int id,
                      int x, int y, int w, int h)
@@ -751,6 +833,10 @@ static HWND make_ctl(HWND parent, DWORD ex, const wchar_t *cls,
     return ctl;
 }
 
+/* Build the whole control tree (library, info panel, transport, speed,
+ * status bar) and put it in its initial disabled state: no track selected
+ * yet, so play/pause/stop/remove/clear/loop/pair all start disabled and
+ * update_ui enables them as state allows. */
 static void create_controls(HWND parent)
 {
     INITCOMMONCONTROLSEX icc;
@@ -884,6 +970,10 @@ static void create_controls(HWND parent)
 
 /* ----------------------------------------------------------------- UI --- */
 
+/* Apply a speed button: send it to the engine and update the label at once
+ * (the 100 ms timer would catch up anyway, but immediate feedback is what a
+ * click should feel like). Only two fixed speeds exist by design: 1,0x and
+ * the observed FLSM factor (AGENTS/requirements: no arbitrary slider). */
 static void apply_speed(uint32_t ppm)
 {
     wchar_t buf[40];
@@ -892,6 +982,12 @@ static void apply_speed(uint32_t ppm)
     SetWindowTextW(g_ctl.valSpeed, buf);
 }
 
+/* One full UI refresh from a fresh snapshot; runs every UI_TICK_MS and
+ * after every command. Deliberately idempotent: SetWindowText is only called
+ * when the text actually changed, so the 10 Hz polling does not churn
+ * redraws or fight the user. Sections: state text, button enables, version
+ * (pair) caption, loop checkbox, device/speed labels, progress repaint, time
+ * display, one-shot error messages. */
 static void update_ui(void)
 {
     PlayerSnapshot s = player_get_state(g_player);
@@ -1010,6 +1106,10 @@ static void update_ui(void)
     }
 }
 
+/* Command router: WM_COMMAND (button/menu/accelerator ids) to actions.
+ * Each case does its own status message; update_ui() at the end re-syncs
+ * everything from the engine rather than assuming the action worked, so the
+ * display can never contradict the player state. */
 static void on_command(int id)
 {
     switch (id) {
@@ -1086,6 +1186,10 @@ static void on_command(int id)
 
 /* --------------------------------------------------------- window proc -- */
 
+/* Main window procedure. WM_CREATE builds controls + timer; WM_NOTIFY turns
+ * list selection into select_track(); WM_COMMAND routes buttons; the color
+ * messages tint the state label by playback state; WM_DESTROY tears down
+ * the engine, GDI objects and the message loop (PostQuitMessage). */
 static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
@@ -1167,6 +1271,8 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
 /* ------------------------------------------------------------ selftest -- */
 
+/* Process working set in bytes (selftest leak check; 0 if the API fails,
+ * which the check then tolerates rather than reporting a false leak). */
 static SIZE_T working_set(void)
 {
     PROCESS_MEMORY_COUNTERS pmc;
@@ -1175,20 +1281,17 @@ static SIZE_T working_set(void)
     return 0;
 }
 
-static int run_selftest(void)
+/* Resource baselines for the leak checks: taken before the first play
+ * (phase 2) and compared after the cycles and after window close (run at
+ * the end). File-scope because the phases are separate functions. */
+static DWORD g_stHandles0;
+static SIZE_T g_stMem0;
+
+/* Phase 1 - library: the custom progress class is in use, an invalid file
+ * is rejected without entering the list, and selecting the first row opens
+ * it and fills the metadata (same handler as a real click). */
+static void st_phase_library(void)
 {
-    DWORD handles0, handles1, handles2;
-    SIZE_T mem0, mem1;
-    int i;
-
-    printf("selftest: %d track(s)%s\n", g_rowCount,
-           g_hasInvalid ? " + invalid file" : "");
-    if (g_stReport)
-        fprintf(g_stReport, "selftest: %d track(s)%s\n", g_rowCount,
-                g_hasInvalid ? " + invalid file" : "");
-
-    st_check(g_rowCount >= 2, "at least 2 tracks loaded");
-
     /* The progress control must be our loop-aware custom class. */
     {
         wchar_t cls[64] = L"";
@@ -1212,10 +1315,19 @@ static int run_selftest(void)
     pump(50);
     st_check(g_selected == 0 && g_snap.sample_rate > 0,
              "selection opens track and fills metadata");
+}
+
+/* Phase 2 - transport: play reaches PLAYING with the device open, the API
+ * stays responsive while the engine decodes (100 ms budget on
+ * player_get_state), and pause freezes the position before resume. Also
+ * records the resource baselines used by the final leak checks. */
+static void st_phase_transport(void)
+{
+    int i;
 
     /* Play: real audio path. */
-    GetProcessHandleCount(GetCurrentProcess(), &handles0);
-    mem0 = working_set();
+    GetProcessHandleCount(GetCurrentProcess(), &g_stHandles0);
+    g_stMem0 = working_set();
     send_cmd(IDC_BTN_PLAY);
     st_check(wait_state(PLAYER_PLAYING, 4000), "play reaches PLAYING");
     st_check(player_get_state(g_player).audio_error == 0,
@@ -1252,7 +1364,14 @@ static int run_selftest(void)
     }
     send_cmd(IDC_BTN_PAUSE);
     st_check(wait_state(PLAYER_PLAYING, 2000), "resume reaches PLAYING");
+}
 
+/* Phase 3 - seek, speed, loop: a click at 3/4 of the bar seeks into
+ * 55..80% and playback continues from there; the FLSM button changes the
+ * device rate live; the loop checkbox (emulating a real click on the
+ * BS_AUTOCHECKBOX) flips the engine flag and restores it. */
+static void st_phase_seek_speed(void)
+{
     /* Seek: a click on the progress bar jumps near that point and the
      * playback keeps going from there. */
     {
@@ -1314,7 +1433,15 @@ static int run_selftest(void)
             st_check(1, "no-loop file: loop control left disabled");
         }
     }
+}
 
+/* Phase 4 - track switch and version (channel-pair) selection: switching
+ * while playing stops cleanly; the 4-channel second track exposes 2 pairs;
+ * the button cycles 1 -> 2 -> mix, its caption matches, and switching
+ * versions live (device reopen path) keeps playback running without audio
+ * errors. */
+static void st_phase_pair(void)
+{
     /* Track switch while playing: playback must stop cleanly. */
     ListView_SetItemState(g_ctl.list, 1, LVIS_SELECTED | LVIS_FOCUSED,
                           LVIS_SELECTED | LVIS_FOCUSED);
@@ -1367,6 +1494,25 @@ static int run_selftest(void)
         st_check(wait_state(PLAYER_STOPPED, 2000),
                  "stop after the version checks");
     }
+}
+
+static int run_selftest(void)
+{
+    DWORD handles1, handles2;
+    SIZE_T mem1;
+    int i;
+
+    printf("selftest: %d track(s)%s\n", g_rowCount,
+           g_hasInvalid ? " + invalid file" : "");
+    if (g_stReport)
+        fprintf(g_stReport, "selftest: %d track(s)%s\n", g_rowCount,
+                g_hasInvalid ? " + invalid file" : "");
+
+    st_check(g_rowCount >= 2, "at least 2 tracks loaded");
+    st_phase_library();
+    st_phase_transport();
+    st_phase_seek_speed();
+    st_phase_pair();
 
     /* Open/play/stop cycles must not leak handles or memory. */
     for (i = 0; i < 3; i++) {
@@ -1380,14 +1526,14 @@ static int run_selftest(void)
     GetProcessHandleCount(GetCurrentProcess(), &handles1);
     mem1 = working_set();
     st_logf("handles after cycles: %lu (base %lu), working set +%.1f MB\n",
-            (unsigned long)handles1, (unsigned long)handles0,
-            ((double)mem1 - (double)mem0) / (1024.0 * 1024.0));
-    /* The device is open when handles0 is taken and closed after the last
-     * stop, so a healthy count can be BELOW the baseline; only growth would
-     * indicate a leak. */
-    st_check(handles1 <= handles0 + 8,
+            (unsigned long)handles1, (unsigned long)g_stHandles0,
+            ((double)mem1 - (double)g_stMem0) / (1024.0 * 1024.0));
+    /* The device is open when g_stHandles0 is taken and closed after the
+     * last stop, so a healthy count can be BELOW the baseline; only growth
+     * would indicate a leak. */
+    st_check(handles1 <= g_stHandles0 + 8,
              "no handle growth across play/stop cycles");
-    st_check(mem1 <= mem0 + 8u * 1024u * 1024u,
+    st_check(mem1 <= g_stMem0 + 8u * 1024u * 1024u,
              "memory growth under 8 MB across cycles");
 
     /* Cleanup: close the real window and compare resources. */
@@ -1408,8 +1554,8 @@ static int run_selftest(void)
     pump(100);
     GetProcessHandleCount(GetCurrentProcess(), &handles2);
     st_logf("handles after window close: %lu (base %lu)\n",
-            (unsigned long)handles2, (unsigned long)handles0);
-    st_check(handles2 <= handles0 + 8,
+            (unsigned long)handles2, (unsigned long)g_stHandles0);
+    st_check(handles2 <= g_stHandles0 + 8,
              "closing the window releases resources");
 
     printf("RESULT: %s (%d checks, %d failed)\n",
@@ -1425,6 +1571,10 @@ static int run_selftest(void)
 
 /* ---------------------------------------------------------------- main -- */
 
+/* Argument parsing for the CLI (paths = tracks to preload; --selftest starts
+ * the scripted session; --invalid names a file that must be rejected;
+ * --report redirects the results). Runs after the window exists because
+ * add_track needs the ListView. */
 static void load_args(int argc, wchar_t **argv)
 {
     int i;

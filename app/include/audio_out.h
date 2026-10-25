@@ -4,6 +4,12 @@
  * player.c). The device reports finished buffers by signaling done_event
  * (CALLBACK_EVENT), which the engine waits on together with its command
  * event.
+ *
+ * Slot lifecycle: audio_write prepares+queues a header, the device plays it
+ * and sets WHDR_DONE (signaling done_event), player.c then reuses the slot.
+ * audio_slot_free and the player's slot_busy[] bookkeeping express the same
+ * fact from the two sides; the player keeps its own copy because it also
+ * needs to know the slot's source position.
  */
 #ifndef AUDIO_OUT_H
 #define AUDIO_OUT_H
@@ -14,6 +20,9 @@
 
 #include <stdint.h>
 
+/* 4 slots of 512 frames each: enough to cover winmm's queueing latency at
+ * 44.1-51.3 kHz (~46 ms) while keeping each buffer small, so a speed or
+ * pair change only discards at most one not-yet-heard slot. */
 #define AUDIO_OUT_SLOTS 4
 
 typedef struct {
@@ -41,6 +50,10 @@ MMRESULT audio_open(AudioOut *a, uint16_t channels, uint32_t rate,
 MMRESULT audio_close(AudioOut *a);
 
 MMRESULT audio_pause(AudioOut *a, int pause);
+
+/* Drop every queued buffer (device keeps playing whatever it already has
+ * until it processes the reset): used before reopening the device so no
+ * audio from the old rate/position leaks into the new one. */
 MMRESULT audio_reset(AudioOut *a);
 
 /* Queue `frames` (<= slot_frames) from pcm on slot. */

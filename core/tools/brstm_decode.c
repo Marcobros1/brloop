@@ -20,6 +20,73 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Load the whole ADPC state table into out (adpc_entry_count*channels
+ * entries, block-major) and reject tables that cannot support per-block
+ * decoding:
+ *   - a missing/short read or fewer entries than blocks (exit 4),
+ *   - a mostly zeroed table: single zero entries can be legitimate silence,
+ *     but a table where >half the entries are all-zero means the encoder
+ *     never filled it (19 of 301 collection files), so trusting it would
+ *     silently decode blocks from a wrong state.
+ * Returns 0 on success, 4 on any ADPC problem, 3 on OOM (err written to
+ * stderr; caller closes the BRSTM). */
+static int load_adpc_states(const Brstm *b, const BrstmInfo *info,
+                            int16_t (**out)[2])
+{
+    size_t cells = (size_t)info->adpc_entry_count * info->channels;
+    int16_t (*adpc)[2] = malloc(cells * sizeof *adpc);
+    uint32_t zero_entries = 0, checked = 0;
+    BrstmStatus st;
+
+    if (!adpc) {
+        fprintf(stderr, "error: out of memory\n");
+        return 3;
+    }
+    for (uint32_t blk = 0; blk < info->adpc_entry_count
+                            && blk < info->block_count; blk++) {
+        for (uint32_t c = 0; c < info->channels; c++) {
+            st = brstm_adpc_state(b, blk, c, &adpc[blk * info->channels + c][0],
+                                  &adpc[blk * info->channels + c][1]);
+            if (st != BRSTM_OK) {
+                fprintf(stderr, "error: ADPC state unavailable for block "
+                                "%u channel %u (%s)\n",
+                        blk, c, brstm_status_string(st));
+                free(adpc);
+                return 4;
+            }
+        }
+        /* Entry 0 describes the state at data start (which the header init
+         * values already provide), so only later entries count as evidence
+         * of "table was filled in". */
+        if (blk > 0) {
+            int all_zero = 1;
+            for (uint32_t c = 0; c < info->channels; c++)
+                if (adpc[blk * info->channels + c][0] != 0
+                    || adpc[blk * info->channels + c][1] != 0)
+                    all_zero = 0;
+            if (all_zero)
+                zero_entries++;
+            checked++;
+        }
+    }
+    if (info->adpc_entry_count < info->block_count) {
+        fprintf(stderr, "error: ADPC table has %u entries, need at least "
+                        "%u blocks\n", info->adpc_entry_count,
+                info->block_count);
+        free(adpc);
+        return 4;
+    }
+    if (checked > 0 && zero_entries > checked / 2) {
+        fprintf(stderr, "error: ADPC table is mostly zeroed (%u of %u "
+                        "entries); encoder never filled it\n",
+                zero_entries, checked);
+        free(adpc);
+        return 4;
+    }
+    *out = adpc;
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *in = NULL, *out = NULL, *state_mode = "carry";
@@ -56,61 +123,20 @@ int main(int argc, char **argv)
 
     const BrstmInfo *info = &b.info;
 
-    /* Load ADPC states once; a mostly-zero table means the encoder never
-     * filled it and per-block states cannot be trusted. */
+    /* Per-block mode validates the ADPC table up front (see
+     * load_adpc_states) so a bad table fails before any decoding. */
     int16_t (*adpc)[2] = NULL;
     if (use_adpc) {
-        size_t cells = (size_t)info->adpc_entry_count * info->channels;
-        adpc = malloc(cells * sizeof *adpc);
-        if (!adpc) {
-            fprintf(stderr, "error: out of memory\n");
+        int rc = load_adpc_states(&b, info, &adpc);
+        if (rc != 0) {
             brstm_close(&b);
-            return 3;
-        }
-        uint32_t zero_entries = 0, checked = 0;
-        for (uint32_t blk = 0; blk < info->adpc_entry_count
-                                && blk < info->block_count; blk++) {
-            for (uint32_t c = 0; c < info->channels; c++) {
-                st = brstm_adpc_state(&b, blk, c, &adpc[blk * info->channels + c][0],
-                                      &adpc[blk * info->channels + c][1]);
-                if (st != BRSTM_OK) {
-                    fprintf(stderr, "error: ADPC state unavailable for block "
-                                    "%u channel %u (%s)\n",
-                            blk, c, brstm_status_string(st));
-                    free(adpc);
-                    brstm_close(&b);
-                    return 4;
-                }
-            }
-            if (blk > 0) {
-                int all_zero = 1;
-                for (uint32_t c = 0; c < info->channels; c++)
-                    if (adpc[blk * info->channels + c][0] != 0
-                        || adpc[blk * info->channels + c][1] != 0)
-                        all_zero = 0;
-                if (all_zero)
-                    zero_entries++;
-                checked++;
-            }
-        }
-        if (info->adpc_entry_count < info->block_count) {
-            fprintf(stderr, "error: ADPC table has %u entries, need at least "
-                            "%u blocks\n", info->adpc_entry_count,
-                    info->block_count);
-            free(adpc);
-            brstm_close(&b);
-            return 4;
-        }
-        if (checked > 0 && zero_entries > checked / 2) {
-            fprintf(stderr, "error: ADPC table is mostly zeroed (%u of %u "
-                            "entries); encoder never filled it\n",
-                    zero_entries, checked);
-            free(adpc);
-            brstm_close(&b);
-            return 4;
+            return rc;
         }
     }
 
+    /* Per-block scratch: raw block bytes, one decoded channel (chbuf), and
+     * the interleaved frame for the WAV writer. All three are sized from the
+     * header, which brstm_open validated. */
     uint8_t *raw = malloc(info->block_size);
     int16_t *pcm = malloc((size_t)info->samples_per_block * info->channels
                           * sizeof(int16_t));
@@ -130,17 +156,27 @@ int main(int argc, char **argv)
         return 3;
     }
 
+    /* Decoder starts each channel at the HEAD part 3 initial history. In
+     * carry mode (default) this state then runs continuously across blocks;
+     * in adpc mode it is overwritten per block below. */
     DspAdpcmState state[BRSTM_MAX_CHANNELS];
     for (uint32_t c = 0; c < info->channels; c++) {
         state[c].hist1 = info->init_hist1[c];
         state[c].hist2 = info->init_hist2[c];
     }
 
+    /* Decode pass: block-major read, channel-major decode, de-interleave
+     * into frames for the writer. `goto done` is the single cleanup path -
+     * every mid-loop error still finalizes the WAV header (so the partial
+     * file parses) and frees everything exactly once. */
     int rc = 0;
     uint32_t written = 0;
     for (uint32_t block = 0; block < info->block_count; block++) {
         uint32_t frames = brstm_block_sample_count(&b, block);
 
+        /* adpc mode: restart every channel from the table entry, which is
+         * the whole point of the flag - proving entry states equal carried
+         * states block by block (run_verification compares both outputs). */
         if (use_adpc) {
             for (uint32_t c = 0; c < info->channels; c++) {
                 state[c].hist1 = adpc[block * info->channels + c][0];

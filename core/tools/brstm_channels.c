@@ -25,20 +25,29 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MAX_CH 16
-#define ENV_WIN 1024
+#define MAX_CH 16   /* mirrors BRSTM_MAX_CHANNELS; the analysis buffers are
+                     * fixed-size arrays, so the tool refuses larger files */
+#define ENV_WIN 1024 /* envelope window in samples (~23 ms at 44.1 kHz):
+                      * fine enough to follow musical phrasing, coarse
+                      * enough to ignore single-sample detail */
 
+/* Hard error for the whole tool: print and leave. Used only after the BRSTM
+ * is open, where a failure (OOM, read error) means no result is trustworthy. */
 static void fail(const char *msg)
 {
     fprintf(stderr, "error: %s\n", msg);
     exit(1);
 }
 
+/* i16abs with an int32 intermediate: -(-32768) is not representable in
+ * int16_t, so the naive ternary would overflow. */
 static int16_t i16abs(int16_t v)
 {
     return v < 0 ? (int16_t)-(int32_t)v : v;
 }
 
+/* Big-endian read; the tool re-parses the header itself for the track table
+ * (brstm.h deliberately does not expose HEAD part 2). */
 static uint32_t be32(const uint8_t *p)
 {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16)
@@ -127,7 +136,7 @@ static int print_track_table(const char *path, uint32_t nc)
             right = desc[10];
         }
         if (nch > 2 || left >= nc || (nch == 2 && right >= nc)) {
-            printf("  track %u: <implausible nch=%u left=%u right=%u>\\n", t,
+            printf("  track %u: <implausible nch=%u left=%u right=%u>\n", t,
                    nch, left, right);
             continue;
         }
@@ -143,15 +152,450 @@ static int print_track_table(const char *path, uint32_t nc)
     return ok;
 }
 
-/* Envelope window buffers (same fill level for every channel). */
-static int16_t env_buf[MAX_CH][ENV_WIN];
-static uint32_t env_n;
+/* ------------------------------------------------------------- statistics */
 
-/* Envelope second-moment rows, one per completed window. */
-static double *env_row;    /* (max_windows) * MAX_CH */
-static uint32_t env_rows;  /* completed windows so far */
-static uint32_t env_cap;
+/* Whole-file accumulators for one analysis run. Kept together because every
+ * report section reads more than one of them and they must all describe the
+ * same decode pass. */
+typedef struct {
+    double sum[MAX_CH];          /* sum of samples, per channel (for Pearson)*/
+    double sumsq[MAX_CH];        /* sum of squares (variance + RMS) */
+    double cross[MAX_CH][MAX_CH];/* sum of a[i]*b[i], upper triangle only */
+    int16_t peak[MAX_CH];        /* max |sample| */
+    /* Bit-identical detection: a pair stays alive while every sample of the
+     * two channels matches exactly; identical pairs are common in original
+     * MKW multi-channel streams (duplicated stereo). */
+    int identical_alive[MAX_CH][MAX_CH];
+} ChannelStats;
 
+static void stats_init(ChannelStats *st, uint32_t nc)
+{
+    memset(st, 0, sizeof *st);
+    for (uint32_t i = 0; i < nc; i++)
+        for (uint32_t j = i; j < nc; j++)
+            st->identical_alive[i][j] = 1;
+}
+
+/* --------------------------------------------------------------- envelope */
+
+/* Amplitude-envelope rows, one per completed ENV_WIN-sample window. The
+ * window buffer and the row array are shared by all channels (every channel
+ * is at the same playback position), which is why this is one struct rather
+ * than per-channel state. */
+typedef struct {
+    int16_t buf[MAX_CH][ENV_WIN]; /* current partial window, per channel */
+    uint32_t n;                   /* samples filled in buf so far */
+    double *row;                  /* (cap) * MAX_CH second moments */
+    uint32_t rows;                /* completed windows so far */
+    uint32_t cap;                 /* allocated row capacity */
+} Envelope;
+
+static void envelope_init(Envelope *env, uint32_t total_samples)
+{
+    env->n = 0;
+    env->rows = 0;
+    env->cap = total_samples / ENV_WIN + 2; /* exact ceiling, +1 for a
+        non-multiple length, +1 so the trailing partial flush always fits */
+    env->row = (double *)malloc((size_t)env->cap * MAX_CH * sizeof(double));
+    if (!env->row)
+        fail("out of memory (envelope)");
+}
+
+/* Append one decoded block slice to the envelope. pcm is channel-major with
+ * the given stride (samples_per_block), so each channel copies from its own
+ * row. Completed windows are reduced to a mean of squares immediately, which
+ * keeps the retained data at one double per channel per 1024 samples instead
+ * of the full PCM. */
+static void envelope_append(Envelope *env, const int16_t *pcm, uint32_t stride,
+                            uint32_t nc, uint32_t frames)
+{
+    uint32_t s = 0;
+    while (s < frames) {
+        uint32_t room = ENV_WIN - env->n;
+        uint32_t take = frames - s < room ? frames - s : room;
+        for (uint32_t c = 0; c < nc; c++)
+            memcpy(env->buf[c] + env->n, pcm + (size_t)c * stride + s,
+                   (size_t)take * sizeof(int16_t));
+        env->n += take;
+        s += take;
+        if (env->n == ENV_WIN) {
+            double *row = env->row + (size_t)env->rows * MAX_CH;
+            for (uint32_t c = 0; c < nc; c++) {
+                double acc = 0;
+                for (uint32_t k = 0; k < ENV_WIN; k++) {
+                    double x = env->buf[c][k];
+                    acc += x * x;
+                }
+                row[c] = acc / ENV_WIN;
+            }
+            env->rows++;
+            env->n = 0;
+        }
+    }
+}
+
+/* Reduce a trailing partial window so the final (usually short) stretch of
+ * the file still counts; without this the last <1024 samples would be
+ * silently dropped from the activity report. */
+static void envelope_flush(Envelope *env, uint32_t nc)
+{
+    if (env->n > 0 && env->rows < env->cap) {
+        double *row = env->row + (size_t)env->rows * MAX_CH;
+        for (uint32_t c = 0; c < nc; c++) {
+            double acc = 0;
+            for (uint32_t k = 0; k < env->n; k++) {
+                double x = env->buf[c][k];
+                acc += x * x;
+            }
+            row[c] = acc / env->n;
+        }
+        env->rows++;
+        env->n = 0;
+    }
+}
+
+static void envelope_free(Envelope *env)
+{
+    free(env->row);
+    env->row = NULL;
+}
+
+/* ------------------------------------------------------------- WAV dumps */
+
+/* Optional listening material. Opened before the decode loop (so a bad
+ * output directory fails fast instead of after decoding the whole file) and
+ * closed after it. pair_open[] exists because pair writers are created only
+ * for even channel pairs. */
+typedef struct {
+    int enabled;
+    const char *dir;
+    const char *stem;
+    WavWriter mono[MAX_CH];
+    WavWriter pair[MAX_CH];
+    WavWriter fold;              /* even/odd fold, what the player plays */
+    int pair_open[MAX_CH];
+} WavDumps;
+
+static void dumps_open(WavDumps *d, const char *dir, const char *stem,
+                       const BrstmInfo *info)
+{
+    char pth[1024];
+
+    memset(d, 0, sizeof *d);
+    d->dir = dir;
+    d->stem = stem;
+    if (!dir) {
+        d->enabled = 0;
+        return;
+    }
+    for (uint32_t c = 0; c < info->channels; c++) {
+        snprintf(pth, sizeof pth, "%s\\%s_ch%u.wav", dir, stem, c);
+        if (wav_open(&d->mono[c], pth, 1, info->sample_rate) != 0) {
+            fprintf(stderr, "error: cannot write %s\n", pth);
+            exit(1);
+        }
+    }
+    for (uint32_t c = 0; c + 1 < info->channels; c += 2) {
+        snprintf(pth, sizeof pth, "%s\\%s_p%u-%u.wav", dir, stem, c, c + 1);
+        if (wav_open(&d->pair[c], pth, 2, info->sample_rate) != 0) {
+            fprintf(stderr, "error: cannot write %s\n", pth);
+            exit(1);
+        }
+        d->pair_open[c] = 1;
+    }
+    snprintf(pth, sizeof pth, "%s\\%s_fold.wav", dir, stem);
+    if (wav_open(&d->fold, pth, 2, info->sample_rate) != 0) {
+        fprintf(stderr, "error: cannot write fold wav\n");
+        exit(1);
+    }
+    d->enabled = 1;
+}
+
+/* Write this block's PCM to every open dump. The pair/interleave buffers are
+ * allocated per call: blocks are at most samples_per_block long (14336
+ * samples = ~57 KB), and keeping the allocation out of the caller keeps the
+ * decode loop free of dump concerns. */
+static void dumps_write_block(WavDumps *d, const int16_t *pcm, uint32_t stride,
+                              uint32_t nc, uint32_t frames)
+{
+    if (!d->enabled)
+        return;
+
+    for (uint32_t c = 0; c < nc; c++)
+        if (wav_write(&d->mono[c], pcm + (size_t)c * stride, frames) != 0)
+            fail("wav write failed (mono)");
+
+    for (uint32_t c = 0; c + 1 < nc; c += 2) {
+        int16_t *dst;
+        if (!d->pair_open[c])
+            continue;
+        dst = (int16_t *)malloc((size_t)frames * 2 * sizeof(int16_t));
+        if (!dst)
+            fail("out of memory (pair)");
+        for (uint32_t s = 0; s < frames; s++) {
+            dst[s * 2] = pcm[(size_t)c * stride + s];
+            dst[s * 2 + 1] = pcm[(size_t)(c + 1) * stride + s];
+        }
+        if (wav_write(&d->pair[c], dst, frames) != 0)
+            fail("wav write failed (pair)");
+        free(dst);
+    }
+
+    {   /* Same even/odd fold as audio_out.c for reference. */
+        uint32_t nl = (nc + 1) / 2, nr = nc / 2;
+        int16_t *dst = (int16_t *)malloc((size_t)frames * 2 * sizeof(int16_t));
+        if (!dst)
+            fail("out of memory (fold)");
+        for (uint32_t s = 0; s < frames; s++) {
+            int32_t l = 0, r = 0;
+            for (uint32_t c = 0; c < nc; c++) {
+                int32_t v = pcm[(size_t)c * stride + s];
+                if ((c & 1) == 0)
+                    l += v;
+                else
+                    r += v;
+            }
+            dst[s * 2] = (int16_t)(l / (int32_t)nl);
+            dst[s * 2 + 1] = (int16_t)(r / (int32_t)nr);
+        }
+        if (wav_write(&d->fold, dst, frames) != 0)
+            fail("wav write failed (fold)");
+        free(dst);
+    }
+}
+
+static void dumps_close(WavDumps *d)
+{
+    if (!d->enabled)
+        return;
+    for (uint32_t c = 0; c < MAX_CH; c++) {
+        if (d->mono[c].file && wav_close(&d->mono[c]) != 0)
+            fail("wav close failed");
+        if (d->pair_open[c] && wav_close(&d->pair[c]) != 0)
+            fail("wav close failed (pair)");
+    }
+    if (wav_close(&d->fold) != 0)
+        fail("wav close failed (fold)");
+}
+
+/* ---------------------------------------------------------------- decode */
+
+/* Decode the whole file block by block and feed the statistics, envelope and
+ * WAV dumps. Carries ADPCM state across blocks (the analyzer measures the
+ * file as the player plays it; ADPC per-block states are not needed here).
+ * Temp buffers live inside this function: they are meaningless outside one
+ * decode pass. */
+static void decode_file(Brstm *b, ChannelStats *st, Envelope *env,
+                        WavDumps *dumps)
+{
+    const BrstmInfo *info = &b->info;
+    const uint32_t nc = info->channels;
+    const uint32_t stride = info->samples_per_block;
+    DspAdpcmState state[MAX_CH];
+    uint8_t *raw = (uint8_t *)malloc(info->block_size);
+    int16_t *pcm = (int16_t *)malloc((size_t)nc * stride * sizeof(int16_t));
+    int16_t *chbuf = (int16_t *)malloc((size_t)stride * sizeof(int16_t));
+    BrstmStatus stcode;
+
+    if (!raw || !pcm || !chbuf)
+        fail("out of memory");
+    memset(state, 0, sizeof state);
+    for (uint32_t c = 0; c < nc; c++) { /* initial histories from HEAD p.3 */
+        state[c].hist1 = info->init_hist1[c];
+        state[c].hist2 = info->init_hist2[c];
+    }
+
+    for (uint32_t block = 0; block < info->block_count; block++) {
+        uint32_t frames = brstm_block_sample_count(b, block);
+        if (frames > stride)
+            frames = stride;
+
+        for (uint32_t c = 0; c < nc; c++) {
+            size_t len = 0;
+            stcode = brstm_read_channel_block(b, block, c, raw,
+                                              info->block_size, &len);
+            if (stcode != BRSTM_OK)
+                fail("cannot read a channel block");
+            dsp_adpcm_decode(raw, len, info->coefs[c], &state[c], chbuf,
+                             frames);
+            memcpy(pcm + (size_t)c * stride, chbuf,
+                   (size_t)frames * sizeof(int16_t));
+        }
+
+        for (uint32_t c = 0; c < nc; c++) {
+            const int16_t *ch = pcm + (size_t)c * stride;
+            for (uint32_t s = 0; s < frames; s++) {
+                double x = ch[s];
+                st->sum[c] += x;
+                st->sumsq[c] += x * x;
+                if (i16abs(ch[s]) > st->peak[c])
+                    st->peak[c] = i16abs(ch[s]);
+            }
+        }
+
+        envelope_append(env, pcm, stride, nc, frames);
+        dumps_write_block(dumps, pcm, stride, nc, frames);
+
+        /* Sample-level cross products for the Pearson matrix. The whole
+         * upper triangle is accumulated here at nc^2 * frames; reducing it
+         * later keeps this loop branch-free. */
+        for (uint32_t i = 0; i < nc; i++) {
+            const int16_t *a = pcm + (size_t)i * stride;
+            for (uint32_t j = i; j < nc; j++) {
+                const int16_t *c2 = pcm + (size_t)j * stride;
+                double acc = 0;
+                for (uint32_t s = 0; s < frames; s++)
+                    acc += (double)a[s] * c2[s];
+                st->cross[i][j] += acc;
+                if (i < j && st->identical_alive[i][j]) {
+                    for (uint32_t s = 0; s < frames; s++) {
+                        if (a[s] != c2[s]) {
+                            st->identical_alive[i][j] = 0;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    free(raw);
+    free(pcm);
+    free(chbuf);
+}
+
+/* ---------------------------------------------------------------- report */
+
+/* Pearson correlation from the accumulated sums, for the pair (i, j). The
+ * nx/ny terms are total*sumsq - sum^2 (n times the variance); returning 0
+ * for a constant channel avoids dividing by zero (a silent channel has zero
+ * variance and simply has no correlation to report). */
+static double pearson(const ChannelStats *st, uint32_t total,
+                      uint32_t i, uint32_t j)
+{
+    double xy = (i <= j) ? st->cross[i][j] : st->cross[j][i];
+    double sx = st->sum[i], sy = st->sum[j];
+    double nx = (double)total * st->sumsq[i] - sx * sx;
+    double ny = (double)total * st->sumsq[j] - sy * sy;
+    if (nx <= 0 || ny <= 0)
+        return 0;
+    return ((double)total * xy - sx * sy) / sqrt(nx * ny);
+}
+
+/* Same formula over envelope rows instead of samples: channels that move
+ * together in energy correlate here even when their waveforms differ (two
+ * covers of the same arrangement), which sample correlation alone misses.
+ * Sums are accumulated for this (i, j) pair directly - identical result to
+ * the full cross matrix the previous version built, without retaining it. */
+static double envelope_pearson(const Envelope *env, uint32_t i, uint32_t j)
+{
+    double si = 0, sj = 0;    /* sum of each channel's window energies */
+    double sii = 0, sjj = 0;  /* sum of squares of each */
+    double sij = 0;           /* sum of products (the cross term) */
+    double nx, ny;
+
+    for (uint32_t w = 0; w < env->rows; w++) {
+        double a = env->row[(size_t)w * MAX_CH + i];
+        double b = env->row[(size_t)w * MAX_CH + j];
+        si += a;
+        sj += b;
+        sii += a * a;
+        sjj += b * b;
+        sij += a * b;
+    }
+    nx = (double)env->rows * sii - si * si;
+    ny = (double)env->rows * sjj - sj * sj;
+    if (nx <= 0 || ny <= 0)
+        return 0;
+    return ((double)env->rows * sij - si * sj) / sqrt(nx * ny);
+}
+
+/* Print the full analysis: header, track table, levels, activity,
+ * bit-identical pairs and both correlation matrices. Pure reporting: it
+ * reads state but never mutates the decode results. */
+static void print_report(const char *path, const BrstmInfo *info,
+                         const ChannelStats *st, const Envelope *env)
+{
+    const uint32_t nc = info->channels;
+    const uint32_t total = info->total_samples;
+
+    printf("file: %s\n", path);
+    printf("rate=%u channels=%u loop=%d loop_start=%u total=%u "
+           "blocks=%u samples_per_block=%u windows=%u\n",
+           info->sample_rate, nc, info->loop ? 1 : 0, info->loop_start,
+           total, info->block_count, info->samples_per_block, env->rows);
+
+    print_track_table(path, nc);
+
+    printf("\nchannel levels (full file):\n");
+    printf("  ch      rms    peak\n");
+    for (uint32_t c = 0; c < nc; c++) {
+        double rms = sqrt(st->sumsq[c] / (double)total);
+        printf("  %2u  %7.0f  %6d\n", c, rms, st->peak[c]);
+    }
+
+    /* Activity: fraction of envelope windows above 8% of the channel peak
+     * window (silence detection: intro/outro rests or muted channels). */
+    printf("\nchannel activity (windows above 8%% of own peak):\n");
+    for (uint32_t c = 0; c < nc; c++) {
+        double mx = 0;
+        uint32_t active = 0;
+        for (uint32_t w = 0; w < env->rows; w++)
+            if (env->row[(size_t)w * MAX_CH + c] > mx)
+                mx = env->row[(size_t)w * MAX_CH + c];
+        for (uint32_t w = 0; w < env->rows; w++)
+            if (env->row[(size_t)w * MAX_CH + c] > mx * 0.08)
+                active++;
+        printf("  %2u  %5.1f%%  (rms of active windows vs all)\n", c,
+               env->rows ? 100.0 * active / env->rows : 0.0);
+    }
+
+    /* Bit-identical pairs: exact duplicated content inside the file. */
+    {
+        int found = 0;
+        for (uint32_t i = 0; i < nc && !found; i++)
+            for (uint32_t j = i + 1; j < nc; j++)
+                if (st->identical_alive[i][j]) {
+                    if (!found) {
+                        printf("\nbit-identical channel pairs:\n");
+                        found = 1;
+                    }
+                    printf("  ch%u == ch%u\n", i, j);
+                }
+        if (!found)
+            printf("\nbit-identical channel pairs: none\n");
+    }
+
+    printf("\ncorrelation (samples, Pearson):\n     ");
+    for (uint32_t c = 0; c < nc; c++)
+        printf(" %6u", c);
+    printf("\n");
+    for (uint32_t i = 0; i < nc; i++) {
+        printf("  %2u ", i);
+        for (uint32_t j = 0; j < nc; j++)
+            printf(" %6.2f", pearson(st, total, i, j));
+        printf("\n");
+    }
+
+    if (env->rows > 1) {
+        printf("\ncorrelation (envelope, %u-sample windows):\n     ",
+               (unsigned)ENV_WIN);
+        for (uint32_t c = 0; c < nc; c++)
+            printf(" %6u", c);
+        printf("\n");
+        for (uint32_t i = 0; i < nc; i++) {
+            printf("  %2u ", i);
+            for (uint32_t j = 0; j < nc; j++)
+                printf(" %6.2f", envelope_pearson(env, i, j));
+            printf("\n");
+        }
+    }
+}
+
+/* ------------------------------------------------------------------ main */
+
+/* Everything above the decode is wiring: arguments, open, stem for output
+ * names, then one pass through decode_file() and the report. */
 int main(int argc, char **argv)
 {
     const char *path = NULL;
@@ -161,19 +605,9 @@ int main(int argc, char **argv)
     const BrstmInfo *info;
     char err[512];
     char stem[256];
-    uint32_t nc, total, block;
-    uint8_t *raw = NULL;
-    int16_t *pcm = NULL;
-    int16_t *chbuf = NULL;
-    DspAdpcmState state[MAX_CH];
-    double sum[MAX_CH], sumsq[MAX_CH];
-    double cross[MAX_CH][MAX_CH];
-    int16_t peak[MAX_CH];
-    int have_wav = 0;
-    /* Bit-identical detection: a pair stays alive while every sample of the
-     * two channels matches exactly; identical pairs are common in original
-     * MKW multi-channel streams (duplicated stereo). */
-    int identical_alive[MAX_CH][MAX_CH];
+    ChannelStats stats;
+    Envelope env;
+    WavDumps dumps;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--wav") == 0 && i + 1 < argc)
@@ -196,359 +630,36 @@ int main(int argc, char **argv)
         return 1;
     }
     info = &b.info;
-    nc = info->channels;
-    total = info->total_samples;
-    if (nc > MAX_CH)
+    if (info->channels > MAX_CH)
         fail("more channels than the analyzer supports");
 
-    {
+    {   /* Output basename: file name without directory or extension, used
+         * as the prefix of every WAV dump. */
         const char *base = strrchr(path, '\\');
         size_t len;
+        char *dot;
         base = base ? base + 1 : path;
         len = strlen(base);
         if (len >= sizeof stem)
             len = sizeof stem - 1;
         memcpy(stem, base, len);
         stem[len] = '\0';
-        {
-            char *dot = strrchr(stem, '.');
-            if (dot)
-                *dot = '\0';
-        }
+        dot = strrchr(stem, '.');
+        if (dot)
+            *dot = '\0';
     }
 
-    memset(sum, 0, sizeof sum);
-    memset(sumsq, 0, sizeof sumsq);
-    memset(cross, 0, sizeof cross);
-    memset(peak, 0, sizeof peak);
-    memset(state, 0, sizeof state);
-    memset(identical_alive, 0, sizeof identical_alive);
-    for (uint32_t i = 0; i < nc; i++)
-        for (uint32_t j = i; j < nc; j++)
-            identical_alive[i][j] = 1;
-    for (uint32_t c = 0; c < nc; c++) {
-        state[c].hist1 = info->init_hist1[c];
-        state[c].hist2 = info->init_hist2[c];
-    }
+    stats_init(&stats, info->channels);
+    envelope_init(&env, info->total_samples);
+    dumps_open(&dumps, wavdir, stem, info);
 
-    raw = (uint8_t *)malloc(info->block_size);
-    pcm = (int16_t *)malloc((size_t)nc * info->samples_per_block
-                            * sizeof(int16_t));
-    chbuf = (int16_t *)malloc((size_t)info->samples_per_block
-                              * sizeof(int16_t));
-    if (!raw || !pcm || !chbuf)
-        fail("out of memory");
+    decode_file(&b, &stats, &env, &dumps);
+    envelope_flush(&env, info->channels);
+    dumps_close(&dumps);
 
-    env_cap = total / ENV_WIN + 2;
-    env_row = (double *)malloc((size_t)env_cap * MAX_CH * sizeof(double));
-    if (!env_row)
-        fail("out of memory (envelope)");
-
-    /* Open the WAV dumps before the decode loop. */
-    WavWriter mono[MAX_CH];
-    WavWriter pair[MAX_CH];
-    WavWriter foldw;
-    int pair_open[MAX_CH];
-    memset(mono, 0, sizeof mono);
-    memset(pair, 0, sizeof pair);
-    memset(pair_open, 0, sizeof pair_open);
-    memset(&foldw, 0, sizeof foldw);
-    if (wavdir) {
-        char pth[1024];
-        for (uint32_t c = 0; c < nc; c++) {
-            snprintf(pth, sizeof pth, "%s\\%s_ch%u.wav", wavdir, stem, c);
-            if (wav_open(&mono[c], pth, 1, info->sample_rate) != 0) {
-                fprintf(stderr, "error: cannot write %s\n", pth);
-                return 1;
-            }
-        }
-        for (uint32_t c = 0; c + 1 < nc; c += 2) {
-            snprintf(pth, sizeof pth, "%s\\%s_p%u-%u.wav", wavdir, stem, c,
-                     c + 1);
-            if (wav_open(&pair[c], pth, 2, info->sample_rate) != 0) {
-                fprintf(stderr, "error: cannot write %s\n", pth);
-                return 1;
-            }
-            pair_open[c] = 1;
-        }
-        snprintf(pth, sizeof pth, "%s\\%s_fold.wav", wavdir, stem);
-        if (wav_open(&foldw, pth, 2, info->sample_rate) != 0) {
-            fprintf(stderr, "error: cannot write fold wav\n");
-            return 1;
-        }
-        have_wav = 1;
-    }
-
-    /* Decode everything, block by block, channel by channel. */
-    for (block = 0; block < info->block_count; block++) {
-        uint32_t frames = brstm_block_sample_count(&b, block);
-        if (frames > info->samples_per_block)
-            frames = info->samples_per_block;
-
-        for (uint32_t c = 0; c < nc; c++) {
-            size_t len = 0;
-            st = brstm_read_channel_block(&b, block, c, raw,
-                                          info->block_size, &len);
-            if (st != BRSTM_OK)
-                fail("cannot read a channel block");
-            dsp_adpcm_decode(raw, len, info->coefs[c], &state[c], chbuf,
-                             frames);
-            memcpy(pcm + (size_t)c * info->samples_per_block, chbuf,
-                   (size_t)frames * sizeof(int16_t));
-        }
-
-        for (uint32_t c = 0; c < nc; c++) {
-            const int16_t *ch = pcm + (size_t)c * info->samples_per_block;
-            for (uint32_t s = 0; s < frames; s++) {
-                double x = ch[s];
-                sum[c] += x;
-                sumsq[c] += x * x;
-                if (i16abs(ch[s]) > peak[c])
-                    peak[c] = i16abs(ch[s]);
-            }
-        }
-        /* Envelope append: all channels share the same window offsets. */
-        {
-            uint32_t s = 0;
-            while (s < frames) {
-                uint32_t room = ENV_WIN - env_n;
-                uint32_t take = frames - s < room ? frames - s : room;
-                for (uint32_t c = 0; c < nc; c++) {
-                    const int16_t *ch = pcm
-                        + (size_t)c * info->samples_per_block;
-                    memcpy(env_buf[c] + env_n, ch + s,
-                           (size_t)take * sizeof(int16_t));
-                }
-                env_n += take;
-                s += take;
-                if (env_n == ENV_WIN) {
-                    double *row = env_row + (size_t)env_rows * MAX_CH;
-                    for (uint32_t c = 0; c < nc; c++) {
-                        double acc = 0;
-                        for (uint32_t k = 0; k < ENV_WIN; k++) {
-                            double x = env_buf[c][k];
-                            acc += x * x;
-                        }
-                        row[c] = acc / ENV_WIN;
-                    }
-                    env_rows++;
-                    env_n = 0;
-                }
-            }
-        }
-
-        if (have_wav) {
-            for (uint32_t c = 0; c < nc; c++) {
-                const int16_t *ch = pcm + (size_t)c * info->samples_per_block;
-                if (wav_write(&mono[c], ch, frames) != 0)
-                    fail("wav write failed (mono)");
-            }
-            for (uint32_t c = 0; c + 1 < nc; c += 2) {
-                if (!pair_open[c])
-                    continue;
-                {
-                    const int16_t *a = pcm
-                        + (size_t)c * info->samples_per_block;
-                    const int16_t *bb = pcm
-                        + (size_t)(c + 1) * info->samples_per_block;
-                    int16_t *dst = (int16_t *)malloc((size_t)frames * 2
-                                                      * sizeof(int16_t));
-                    if (!dst)
-                        fail("out of memory (pair)");
-                    for (uint32_t s = 0; s < frames; s++) {
-                        dst[s * 2] = a[s];
-                        dst[s * 2 + 1] = bb[s];
-                    }
-                    if (wav_write(&pair[c], dst, frames) != 0)
-                        fail("wav write failed (pair)");
-                    free(dst);
-                }
-            }
-            {
-                /* Same even/odd fold as audio_out.c for reference. */
-                uint32_t nl = (nc + 1) / 2, nr = nc / 2;
-                int16_t *dst = (int16_t *)malloc((size_t)frames * 2
-                                                  * sizeof(int16_t));
-                if (!dst)
-                    fail("out of memory (fold)");
-                for (uint32_t s = 0; s < frames; s++) {
-                    int32_t l = 0, r = 0;
-                    for (uint32_t c = 0; c < nc; c++) {
-                        int32_t v = pcm[(size_t)c * info->samples_per_block
-                                        + s];
-                        if ((c & 1) == 0)
-                            l += v;
-                        else
-                            r += v;
-                    }
-                    dst[s * 2] = (int16_t)(l / (int32_t)nl);
-                    dst[s * 2 + 1] = (int16_t)(r / (int32_t)nr);
-                }
-                if (wav_write(&foldw, dst, frames) != 0)
-                    fail("wav write failed (fold)");
-                free(dst);
-            }
-        }
-
-        /* Sample-level cross products (upper triangle computed later from
-         * full sums: accumulate all pairs here, it is nc^2 * frames). */
-        for (uint32_t i = 0; i < nc; i++) {
-            const int16_t *a = pcm + (size_t)i * info->samples_per_block;
-            for (uint32_t j = i; j < nc; j++) {
-                const int16_t *c2 = pcm
-                    + (size_t)j * info->samples_per_block;
-                double acc = 0;
-                for (uint32_t s = 0; s < frames; s++)
-                    acc += (double)a[s] * c2[s];
-                cross[i][j] += acc;
-                if (i < j && identical_alive[i][j]) {
-                    for (uint32_t s = 0; s < frames; s++) {
-                        if (a[s] != c2[s]) {
-                            identical_alive[i][j] = 0;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /* Flush a trailing partial envelope window. */
-    if (env_n > 0 && env_rows < env_cap) {
-        double *row = env_row + (size_t)env_rows * MAX_CH;
-        for (uint32_t c = 0; c < nc; c++) {
-            double acc = 0;
-            for (uint32_t k = 0; k < env_n; k++) {
-                double x = env_buf[c][k];
-                acc += x * x;
-            }
-            row[c] = acc / env_n;
-        }
-        env_rows++;
-        env_n = 0;
-    }
-
-    if (have_wav) {
-        for (uint32_t c = 0; c < nc; c++)
-            if (wav_close(&mono[c]) != 0)
-                fail("wav close failed");
-        for (uint32_t c = 0; c + 1 < nc; c += 2)
-            if (pair_open[c] && wav_close(&pair[c]) != 0)
-                fail("wav close failed (pair)");
-        if (wav_close(&foldw) != 0)
-            fail("wav close failed (fold)");
-    }
-
-    /* ---------------------------------------------------------- report -- */
-    printf("file: %s\n", path);
-    printf("rate=%u channels=%u loop=%d loop_start=%u total=%u "
-           "blocks=%u samples_per_block=%u windows=%u\n",
-           info->sample_rate, nc, info->loop ? 1 : 0, info->loop_start,
-           total, info->block_count, info->samples_per_block, env_rows);
-
-    print_track_table(path, nc);
-
-    printf("\nchannel levels (full file):\n");
-    printf("  ch      rms    peak\n");
-    for (uint32_t c = 0; c < nc; c++) {
-        double rms = sqrt(sumsq[c] / (double)total);
-        printf("  %2u  %7.0f  %6d\n", c, rms, peak[c]);
-    }
-
-    /* Activity: fraction of envelope windows above 8% of the channel peak
-     * window (silence detection: intro/outro rests or muted channels). */
-    printf("\nchannel activity (windows above 8%% of own peak):\n");
-    for (uint32_t c = 0; c < nc; c++) {
-        double mx = 0;
-        uint32_t active = 0;
-        for (uint32_t w = 0; w < env_rows; w++)
-            if (env_row[(size_t)w * MAX_CH + c] > mx)
-                mx = env_row[(size_t)w * MAX_CH + c];
-        for (uint32_t w = 0; w < env_rows; w++)
-            if (env_row[(size_t)w * MAX_CH + c] > mx * 0.08)
-                active++;
-        printf("  %2u  %5.1f%%  (rms of active windows vs all)\n", c,
-               env_rows ? 100.0 * active / env_rows : 0.0);
-    }
-
-    /* Bit-identical pairs: exact duplicated content inside the file. */
-    {
-        int found = 0;
-        for (uint32_t i = 0; i < nc && !found; i++)
-            for (uint32_t j = i + 1; j < nc; j++)
-                if (identical_alive[i][j]) {
-                    if (!found) {
-                        printf("\nbit-identical channel pairs:\n");
-                        found = 1;
-                    }
-                    printf("  ch%u == ch%u\\n", i, j);
-                }
-        if (!found)
-            printf("\nbit-identical channel pairs: none\\n");
-    }
-
-    /* Sample-level Pearson correlation. */
-    printf("\ncorrelation (samples, Pearson):\n     ");
-    for (uint32_t c = 0; c < nc; c++)
-        printf(" %6u", c);
-    printf("\n");
-    for (uint32_t i = 0; i < nc; i++) {
-        printf("  %2u ", i);
-        for (uint32_t j = 0; j < nc; j++) {
-            double xy = (i <= j) ? cross[i][j] : cross[j][i];
-            double sx = sum[i], sy = sum[j];
-            double nx = (double)total * sumsq[i] - sx * sx;
-            double ny = (double)total * sumsq[j] - sy * sy;
-            double r = 0;
-            if (nx > 0 && ny > 0)
-                r = ((double)total * xy - sx * sy) / sqrt(nx * ny);
-            printf(" %6.2f", r);
-        }
-        printf("\n");
-    }
-
-    /* Envelope (energy) correlation: shared musical timing. */
-    if (env_rows > 1) {
-        double esum[MAX_CH] = {0}, esumsq[MAX_CH] = {0};
-        double ecross[MAX_CH][MAX_CH];
-        memset(ecross, 0, sizeof ecross);
-        for (uint32_t w = 0; w < env_rows; w++) {
-            for (uint32_t i = 0; i < nc; i++) {
-                double v = env_row[(size_t)w * MAX_CH + i];
-                esum[i] += v;
-                esumsq[i] += v * v;
-                for (uint32_t j = i; j < nc; j++)
-                    ecross[i][j] += v * env_row[(size_t)w * MAX_CH + j];
-            }
-        }
-        printf("\ncorrelation (envelope, %u-sample windows):\n     ",
-               (unsigned)ENV_WIN);
-        for (uint32_t c = 0; c < nc; c++)
-            printf(" %6u", c);
-        printf("\n");
-        for (uint32_t i = 0; i < nc; i++) {
-            printf("  %2u ", i);
-            for (uint32_t j = 0; j < nc; j++) {
-                double xy = (i <= j) ? ecross[i][j] : ecross[j][i];
-                double nx = (double)env_rows * esumsq[i] - esum[i] * esum[i];
-                double ny = (double)env_rows * esumsq[j] - esum[j] * esum[j];
-                double r = 0;
-                if (nx > 0 && ny > 0)
-                    r = ((double)env_rows * xy - esum[i] * esum[j])
-                        / sqrt(nx * ny);
-                printf(" %6.2f", r);
-            }
-            printf("\n");
-        }
-    }
-
-    if (have_wav)
-        printf("\nwav dumps written to: %s\n", wavdir);
+    print_report(path, info, &stats, &env);
 
     brstm_close(&b);
-    free(raw);
-    free(pcm);
-    free(chbuf);
-    free(env_row);
+    envelope_free(&env);
     return 0;
 }

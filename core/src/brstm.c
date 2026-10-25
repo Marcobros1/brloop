@@ -6,6 +6,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Stable human-readable text for each status code. Kept separate from the
+ * fail() messages so callers can label an error even when no detailed
+ * message was produced (e.g. errors returned by the read helpers below). */
 const char *brstm_status_string(BrstmStatus status)
 {
     switch (status) {
@@ -24,6 +27,9 @@ const char *brstm_status_string(BrstmStatus status)
     return "unknown error";
 }
 
+/* Single error exit for the whole parser: writes the formatted detail into
+ * the caller's buffer (err may be NULL when no detail is wanted) and returns
+ * the status, so every failure site is one statement instead of two. */
 static BrstmStatus fail(char *err, size_t errlen, BrstmStatus status,
                         const char *fmt, ...)
 {
@@ -36,6 +42,8 @@ static BrstmStatus fail(char *err, size_t errlen, BrstmStatus status,
     return status;
 }
 
+/* BRSTM is big-endian (Wii): these read helpers are the only place that
+ * knows the byte order, so parsing code never shifts bytes by hand. */
 static uint16_t be16(const uint8_t *p) { return (uint16_t)((p[0] << 8) | p[1]); }
 static uint32_t be32(const uint8_t *p)
 {
@@ -43,13 +51,16 @@ static uint32_t be32(const uint8_t *p)
          | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
+/* Seek+read as one operation; returns 0 if either step fails. All reads in
+ * this file go through it so IO failures are detected uniformly. */
 static int read_at(FILE *f, long offset, void *buf, size_t len)
 {
     return fseek(f, offset, SEEK_SET) == 0
         && fread(buf, 1, len, f) == len;
 }
 
-/* Fixed 0x40-byte RSTM header. */
+/* Fixed 0x40-byte RSTM header. Offsets are absolute in the file; sizes are
+ * the declared chunk payload lengths. */
 typedef struct {
     uint32_t file_size;
     uint16_t header_size;
@@ -58,6 +69,10 @@ typedef struct {
     uint32_t data_off, data_size;
 } RstmHeader;
 
+/* Parse and validate the fixed header: magic, byte order, chunk table bounds
+ * and HEAD/DATA (and ADPC when present) magic bytes. Everything that could
+ * make later offsets unsafe is rejected here, so the parse_head_* functions
+ * can trust h. */
 static BrstmStatus parse_rstm_header(FILE *f, long fsize, RstmHeader *h,
                                      char *err, size_t errlen)
 {
@@ -122,7 +137,12 @@ static BrstmStatus parse_rstm_header(FILE *f, long fsize, RstmHeader *h,
     return BRSTM_OK;
 }
 
-/* HEAD part 1: fixed 0x34-byte stream parameter block. */
+/* HEAD part 1: fixed 0x34-byte stream parameter block.
+ * Reads the stream fields and then validates every one of them against the
+ * ranges the decoder relies on (codec, channels, rate, loop, block geometry).
+ * The cross-checks at the end (final-block byte need, total = (blocks-1)*spb
+ * + final) hold for all 301 collection files, so a mismatch means a corrupt
+ * header rather than an exotic-but-valid variant. */
 static BrstmStatus parse_head_part1(FILE *f, const RstmHeader *h,
                                     uint32_t rel, BrstmInfo *info,
                                     char *err, size_t errlen)
@@ -277,6 +297,11 @@ static BrstmStatus parse_head_part3(FILE *f, const RstmHeader *h,
     return BRSTM_OK;
 }
 
+/* Open sequence: size the file -> fixed header -> HEAD parts 1 and 3 ->
+ * layout arithmetic -> ADPC table location. Every early return closes the
+ * FILE* so a failed open never leaks a handle (the winmm handle-leak
+ * measurements in MEMORY.md made leak discipline a hard rule here). The
+ * output struct is zeroed first so brstm_close is safe on any error path. */
 BrstmStatus brstm_open(const char *path, Brstm *out, char *err, size_t errlen)
 {
     memset(out, 0, sizeof *out);
@@ -359,6 +384,9 @@ BrstmStatus brstm_open(const char *path, Brstm *out, char *err, size_t errlen)
     return BRSTM_OK;
 }
 
+/* Close and release the file. Safe to call twice: brstm_open zeroes the
+ * struct first, and this nulls the handle, so *b is always in a known state
+ * after either an error path or a successful open. */
 void brstm_close(Brstm *b)
 {
     if (b->file) {
@@ -367,6 +395,11 @@ void brstm_close(Brstm *b)
     }
 }
 
+/* Block b starts at b * samples_per_block: all blocks except the last have
+ * identical size, so no per-block table is needed. Out-of-range blocks clamp
+ * to the last one instead of failing, because callers use these to translate
+ * a position (which can be at total_samples exactly) and clamping is the
+ * correct answer there, not an error. */
 uint32_t brstm_block_start_sample(const Brstm *b, uint32_t block)
 {
     const BrstmInfo *info = &b->info;
@@ -375,6 +408,8 @@ uint32_t brstm_block_start_sample(const Brstm *b, uint32_t block)
     return (uint32_t)((uint64_t)block * info->samples_per_block);
 }
 
+/* Samples in one block: full blocks all carry samples_per_block, only the
+ * (possibly single) final block can be shorter; clamping as above. */
 uint32_t brstm_block_sample_count(const Brstm *b, uint32_t block)
 {
     const BrstmInfo *info = &b->info;
@@ -385,6 +420,9 @@ uint32_t brstm_block_sample_count(const Brstm *b, uint32_t block)
     return info->samples_per_block;
 }
 
+/* Inverse of brstm_block_start_sample for seeking. Blocks are uniform, so
+ * division is exact; a sample past the end clamps to the last block (the
+ * caller then trims at total_samples). */
 uint32_t brstm_block_for_sample(const Brstm *b, uint32_t sample)
 {
     uint32_t block = sample / b->info.samples_per_block;
@@ -393,6 +431,11 @@ uint32_t brstm_block_for_sample(const Brstm *b, uint32_t sample)
     return block;
 }
 
+/* Address of channel c in block b = adpcm_start + b*(block_size*channels)
+ * + c*stride: channels are interleaved one block at a time (channel-major
+ * within a block). The final block uses its padded stride as the channel
+ * spacing but only its unpadded size as the payload, so short trailing
+ * padding of the file is never read. */
 BrstmStatus brstm_read_channel_block(const Brstm *b, uint32_t block,
                                      uint32_t channel, uint8_t *buf,
                                      size_t buflen, size_t *out_len)
@@ -418,6 +461,11 @@ BrstmStatus brstm_read_channel_block(const Brstm *b, uint32_t block,
     return BRSTM_OK;
 }
 
+/* ADPC entry layout: entry b = b*(channels*4) bytes after the table start,
+ * channel c at +c*4, each entry a big-endian (hist1, hist2) pair. Returns
+ * BRSTM_ERR_NO_ADPC for a missing/short table or out-of-range index so the
+ * caller can distinguish "no usable hint" from a real IO error and fall back
+ * to carried state. */
 BrstmStatus brstm_adpc_state(const Brstm *b, uint32_t block, uint32_t channel,
                              int16_t *hist1, int16_t *hist2)
 {

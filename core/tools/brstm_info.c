@@ -23,6 +23,8 @@ int main(int argc, char **argv)
         return st == BRSTM_ERR_IO ? 3 : 2;
     }
 
+    /* loop_end is total_samples: BRSTM defines the loop section as
+     * [loop_start, total) and the end of the loop is the end of the data. */
     const BrstmInfo *i = &b.info;
     printf("codec=%u\n", i->codec);
     printf("channels=%u\n", i->channels);
@@ -42,6 +44,8 @@ int main(int argc, char **argv)
     printf("has_adpc=%s\n", i->has_adpc ? "true" : "false");
     printf("adpc_entry_count=%u\n", i->adpc_entry_count);
 
+    /* Per-channel HEAD part 3 values, printed for every channel so scripts
+     * can diff them across files (they identify encoder/tool variants). */
     for (uint32_t c = 0; c < i->channels; c++) {
         printf("ch%u_init_hist1=%d\n", c, i->init_hist1[c]);
         printf("ch%u_init_hist2=%d\n", c, i->init_hist2[c]);

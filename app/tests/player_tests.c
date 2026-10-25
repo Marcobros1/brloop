@@ -32,17 +32,22 @@
 
 #include "player.h"
 
-#define TOL_SEC 0.5 /* absolute floor of the wall-clock tolerance */
+/* Wall-clock checks can never be exact (scheduler, driver buffering), so a
+ * 4% relative tolerance is used with this absolute floor for very short
+ * files where 4% would be tighter than the measurement noise. */
+#define TOL_SEC 0.5
 
-static int g_pass, g_fail;
-static FILE *g_report;
+static int g_pass, g_fail; /* check counters, summarized in the RESULT line */
+static FILE *g_report;     /* optional duplicate of stdout (--report) */
 
-static char g_col[512];
-static char g_inv[512];
-static char g_vgm[512];
-static char g_work[512];
+static char g_col[512];  /* --collection: real .brstm files (read-only) */
+static char g_inv[512];  /* --invalid: mutant .brstm files that must fail */
+static char g_vgm[512];  /* --vgmstream: test.exe reference decoder */
+static char g_work[512]; /* --work: scratch dir for temporary reference WAVs */
 
-static int16_t g_chunk[4096 * 16]; /* render scratch for streaming tests */
+static int16_t g_chunk[4096 * 16]; /* render scratch: big enough for the
+                                    * 4096-frame streaming reads and for
+                                    * 16-channel interleaving (4096*16) */
 
 typedef struct {
     const char *name;
@@ -66,6 +71,9 @@ static const ExpectFile k_files[] = {
 
 static const char *k_short = "o_Crs_In_Fan_Wifi.brstm";
 
+/* The test battery's output channel: stdout always, report file when opened.
+ * Every check/note goes through here so a redirected run and an interactive
+ * one produce identical evidence. */
 static void emit(const char *line)
 {
     puts(line);
@@ -77,6 +85,9 @@ static void emit(const char *line)
     }
 }
 
+/* Record a named check: PASS/FAIL is decided by the caller (ok), the
+ * counters feed the final RESULT line and the exit code. Format-style so
+ * every check can print the actual vs expected values as evidence. */
 static void check(int ok, const char *fmt, ...)
 {
     char msg[1024], line[1100];
@@ -92,6 +103,8 @@ static void check(int ok, const char *fmt, ...)
         g_fail++;
 }
 
+/* Informational line (indented, not counted): measurements, timings and
+ * state dumps that support a check but are not checks themselves. */
 static void note(const char *fmt, ...)
 {
     char msg[1024], line[1100];
@@ -103,11 +116,15 @@ static void note(const char *fmt, ...)
     emit(line);
 }
 
+/* Build a path inside the collection directory (the one read-only source
+ * of real files for every test group). */
 static void col_path(const char *name, char *out, size_t n)
 {
     snprintf(out, n, "%s\\%s", g_col, name);
 }
 
+/* Monotonic wall clock in milliseconds (QueryPerformanceCounter); used for
+ * latency and duration measurements. The frequency is queried once. */
 static double now_ms(void)
 {
     static LARGE_INTEGER freq;
@@ -118,6 +135,9 @@ static double now_ms(void)
     return 1000.0 * (double)c.QuadPart / (double)freq.QuadPart;
 }
 
+/* Poll player_get_state until the state matches or the timeout expires;
+ * the engine runs its own thread, so tests observe state transitions the
+ * same way the UI does instead of calling internal functions. */
 static int wait_state(Player *p, PlayerState want, DWORD timeout_ms)
 {
     double start = now_ms();
@@ -129,6 +149,9 @@ static int wait_state(Player *p, PlayerState want, DWORD timeout_ms)
     return player_get_state(p).state == want;
 }
 
+/* Handle and memory snapshots for the leak checks. Handle counts are only
+ * meaningful relative to a baseline taken after winmm_warmup(), because the
+ * first open pays a one-time driver initialization (see that function). */
 static DWORD handle_count(void)
 {
     DWORD n = 0;
@@ -136,7 +159,7 @@ static DWORD handle_count(void)
     return n;
 }
 
-static SIZE_T working_set(void)
+static SIZE_T working_set(void)  /* process working set; 0 if the API fails */
 {
     PROCESS_MEMORY_COUNTERS pmc;
     if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof pmc))
@@ -165,16 +188,21 @@ static void winmm_warmup(void)
 
 /* ----------------------------------------------------------------- WAV --- */
 
+/* Reference WAV loaded fully into memory: the loop comparison reads the
+ * PCM sequentially against our render, so a whole-file buffer keeps the
+ * compare loop simple; reference files are a few MB at most. */
 typedef struct {
-    uint8_t *bytes;
+    uint8_t *bytes;        /* whole file */
     size_t size;
     uint16_t channels;
     uint16_t bits;
-    const uint8_t *pcm;
+    const uint8_t *pcm;    /* points into bytes: the data chunk payload */
     uint32_t pcm_bytes;
     uint32_t frames;
 } WavRef;
 
+/* Little-endian readers: the reference WAV is always little-endian RIFF
+ * regardless of host order. */
 static uint32_t rd_u32le(const uint8_t *b)
 {
     return (uint32_t)b[0] | ((uint32_t)b[1] << 8)
@@ -186,12 +214,16 @@ static uint16_t rd_u16le(const uint8_t *b)
     return (uint16_t)((uint16_t)b[0] | ((uint16_t)b[1] << 8));
 }
 
-static void wav_free(WavRef *w)
+static void wav_free(WavRef *w)  /* release and zero, safe to call twice */
 {
     free(w->bytes);
     memset(w, 0, sizeof *w);
 }
 
+/* Parse the reference WAV: RIFF/WAVE magic, a PCM (format 1) fmt chunk and
+ * a data chunk; anything else (compressed formats, missing chunks) is an
+ * error, because the comparison assumes interleaved PCM16. Chunk lengths are
+ * clamped to the file so a lying header cannot read past the buffer. */
 static int wav_load(const char *path, WavRef *w, char *err, size_t errlen)
 {
     FILE *f;
@@ -272,6 +304,10 @@ static int wav_load(const char *path, WavRef *w, char *err, size_t errlen)
 
 /* --------------------------------------------------------------- groups -- */
 
+/* Metadata group (headless): open every representative collection file and
+ * compare rate/channels/total/loop against values already cross-checked
+ * against vgmstream in the T1 harness (k_files). Covers 44100/48000/51269
+ * rates, stereo/4ch/8ch and both loop and no-loop files. */
 static void test_metadata(void)
 {
     Player *p;
@@ -313,6 +349,9 @@ static void test_metadata(void)
     player_destroy(p);
 }
 
+/* Speed group (headless): the ppm->device_rate mapping is pure arithmetic
+ * (player_device_rate) checked against the two conversions measured from
+ * real FLSM output, plus the clamp bounds on set_speed through a real file. */
 static void test_speed_mapping(void)
 {
     Player *p;
@@ -370,6 +409,10 @@ static void test_speed_mapping(void)
     player_destroy(p);
 }
 
+/* Invalid group (headless): every mutant generated by make_invalid_cases.py
+ * must be rejected and the untampered control must still open afterwards
+ * (recovery after failures). The directory listing is dynamic, so mutants
+ * are added/removed without touching this test. */
 static void test_invalid(void)
 {
     WIN32_FIND_DATAA fd;
@@ -429,6 +472,11 @@ static void test_invalid(void)
     player_destroy(p);
 }
 
+/* Loop group: the strongest correctness check in the battery. vgmstream
+ * renders the same file with its own loop handling (-l 2 -f 0: loop twice,
+ * no fade), and our streaming render (headless) must be byte-identical over
+ * the initial pass plus one full loop section. Also verifies the wrap count
+ * and that each wrap lands exactly on loop_start. */
 static void test_loop_reference(void)
 {
     Player *p;
@@ -546,6 +594,9 @@ static void test_loop_reference(void)
     DeleteFileA(refpath);
 }
 
+/* No-loop group: a file without loop metadata must play to exactly
+ * total_samples and transition to FINISHED, even if loop-on was requested
+ * (the flag cannot invent a loop that the file does not define). */
 static void test_no_loop_end(void)
 {
     Player *p;
@@ -606,6 +657,8 @@ static void test_no_loop_end(void)
     player_destroy(p);
 }
 
+/* Loop-off group: a file that HAS loop metadata but with the loop disabled
+ * must behave like a no-loop file: play to total_samples and finish. */
 static void test_loop_off_looped(void)
 {
     Player *p;
@@ -941,6 +994,10 @@ static void test_channel_pair(void)
     player_destroy(p);
 }
 
+/* Memory group: render ~16M frames (many loop iterations) headless and
+ * require the working set to stay flat. The baseline is taken after the
+ * first 1M frames so one-time allocations (circular buffer, ADPC state)
+ * are already paid and only growth would be flagged. */
 static void test_memory(void)
 {
     Player *p;
@@ -995,6 +1052,9 @@ static void test_memory(void)
     player_destroy(p);
 }
 
+/* Headless transport group: the state machine (play/pause/resume/stop) with
+ * no audio device, including a <50 ms latency budget per call - the engine
+ * must never block the caller on the device thread. */
 static void test_transport_headless(void)
 {
     Player *p;
@@ -1150,6 +1210,11 @@ static void test_resource_probe(void)
     }
 }
 
+/* Real-device transport group: the same lifecycle on waveOut, plus what
+ * only a real device can show - the multichannel open path (native or
+ * stereo fold), the winmm failed-open handle tax documented in
+ * audio_out.c, and the handle/memory balance across open/play/stop cycles
+ * and after destroy. */
 static void test_transport_audio(void)
 {
     Player *p;
@@ -1378,6 +1443,9 @@ static void test_transport_audio(void)
           ((double)m1 - (double)m0) / 1048576.0);
 }
 
+/* Run the current file from the start to PLAYER_FINISHED on the real device
+ * and return the wall-clock seconds, or -1 on failure with the state dump
+ * in *ok = 0. Used by test_realtime, which needs measured durations. */
 static double play_to_finished(Player *p, double timeout_s, int *ok)
 {
     double t0;
@@ -1404,6 +1472,11 @@ static double play_to_finished(Player *p, double timeout_s, int *ok)
     return (now_ms() - t0) / 1000.0;
 }
 
+/* Realtime group: proves the speed change works through the actual audio
+ * device, comparing wall-clock durations of a full non-looped pass at 1.0x
+ * and at the FLSM speed (each within 4%/0.5 s of the expected duration),
+ * then letting a real-time loop wrap happen and checking the wrap lands on
+ * loop_start with the position staying inside [loop_start, total). */
 static void test_realtime(void)
 {
     Player *p;
@@ -1554,6 +1627,8 @@ static void test_realtime(void)
 
 /* ---------------------------------------------------------------- main -- */
 
+/* Parse "--flag value" pairs: returns 1 and consumes both tokens when argv[*i]
+ * matches flag, otherwise 0. Keeps the main() argument loop readable. */
 static int need_arg(int argc, char **argv, int *i, const char *flag,
                     char *out, size_t n)
 {
@@ -1565,6 +1640,9 @@ static int need_arg(int argc, char **argv, int *i, const char *flag,
     return 0;
 }
 
+/* Entry point: parse the required directory arguments (--collection,
+ * --invalid, --vgmstream, --work plus the optional --report/--only), then
+ * run each group. Exit 0 = all checks passed, 1 = any failure, 2 = usage. */
 int main(int argc, char **argv)
 {
     int i, have_col = 0, have_inv = 0, have_vgm = 0, have_work = 0;

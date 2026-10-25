@@ -2,6 +2,8 @@
 
 #include <string.h>
 
+/* Little-endian scalar writers: WAV is a little-endian format regardless of
+ * host byte order, so every multi-byte field goes through these. */
 static void put_u32(uint8_t *p, uint32_t v)
 {
     p[0] = (uint8_t)(v & 0xFF);
@@ -16,6 +18,10 @@ static void put_u16(uint8_t *p, uint16_t v)
     p[1] = (uint8_t)((v >> 8) & 0xFF);
 }
 
+/* Write the canonical 44-byte RIFF header at offset 0. Called twice with
+ * the same layout: once at open with data_bytes = 0 (so a crashed run still
+ * leaves a parseable file) and again at close with the real size - the
+ * streaming path never seeks back per write, it only patches at the end. */
 static int write_header(WavWriter *w, uint32_t data_bytes)
 {
     uint8_t hdr[44];
@@ -73,6 +79,8 @@ int wav_write(WavWriter *w, const int16_t *interleaved, uint32_t frames)
     return 0;
 }
 
+/* Count bytes in data_bytes as uint32_t: files here are a few minutes of
+ * PCM16 at most (4 GB RIFF limit is never approached), so no RF64 needed. */
 int wav_close(WavWriter *w)
 {
     if (!w->file)
