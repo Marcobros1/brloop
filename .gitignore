@@ -17,6 +17,10 @@ core/build/
 *.ogg
 *.flac
 
+# ---- Changelogs personales del usuario (fuera del repo) ----
+CHANGELOG.md
+CHANGELOG_INTERNAL.md
+
 # ---- Archivos operacionales del agente (no son el proyecto) ----
 production/
 .opencode/
