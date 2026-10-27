@@ -40,9 +40,9 @@ static Player *g_player;    /* engine; created in wWinMain, destroyed in
                              * WM_DESTROY (so every exit path is covered by
                              * the window lifetime) */
 
-static TrackRow *g_library_rows;    /* library array, grows by doubling */
-static int g_library_count, g_library_capacity;
-static int g_selected_index = -1; /* index into g_library_rows, -1 = nothing selected */
+static LibraryState g_library = {
+    NULL, 0, 0, -1
+};
 
 /* Last snapshot polled from the player (100 ms timer). The UI never reads
  * the player directly outside update_ui/select_track, so g_player_snapshot is the one
@@ -214,15 +214,15 @@ static void select_track(int idx)
     wchar_t msg[1400];
     PlayerSnapshot s;
 
-    if (idx < 0 || idx >= g_library_count || idx == g_selected_index)
+    if (idx < 0 || idx >= g_library.count || idx == g_library.selected_index)
         return;
 
     /* Close the current track before selecting the new one. This keeps the
      * UI and player state aligned when opening the replacement fails. */
     player_stop(g_player);
     player_close(g_player);
-    g_selected_index = idx;
-    row = &g_library_rows[idx];
+    g_library.selected_index = idx;
+    row = &g_library.rows[idx];
 
     if (!narrow_path(row->path, narrow, sizeof narrow)) {
         clear_info_panel();
@@ -283,19 +283,19 @@ static int add_track(const wchar_t *path, wchar_t *errbuf, size_t errlen)
         return -1;
     }
 
-    if (g_library_count == g_library_capacity) {
-        int cap = g_library_capacity ? g_library_capacity * 2 : 8;
-        TrackRow *rows = (TrackRow *)realloc(g_library_rows,
+    if (g_library.count == g_library.capacity) {
+        int cap = g_library.capacity ? g_library.capacity * 2 : 8;
+        TrackRow *rows = (TrackRow *)realloc(g_library.rows,
                                              (size_t)cap * sizeof *rows);
         if (!rows) {
             brstm_close(&tmp);
             swprintf(errbuf, errlen, L"«%s»: sin memoria", file_name_of(path));
             return -1;
         }
-        g_library_rows = rows;
-        g_library_capacity = cap;
+        g_library.rows = rows;
+        g_library.capacity = cap;
     }
-    row = &g_library_rows[g_library_count];
+    row = &g_library.rows[g_library.count];
     memset(row, 0, sizeof *row);
     row->path = dup_wide(path);
     row->name = dup_wide(file_name_of(path));
@@ -313,56 +313,56 @@ static int add_track(const wchar_t *path, wchar_t *errbuf, size_t errlen)
     row->loop_start = tmp.info.loop_start;
     brstm_close(&tmp);
 
-    list_insert_row(g_library_count, row);
-    g_library_count++;
+    list_insert_row(g_library.count, row);
+    g_library.count++;
     return 0;
 }
 
 /* Remove row idx: shift the array, delete the list item and repair the
  * selection. If the removed row was playing, playback stops; the next row
- * (or none) becomes the selection, keeping g_selected_index always valid. */
+ * (or none) becomes the selection, keeping g_library.selected_index always valid. */
 static void remove_track(int idx)
 {
     TrackRow *row;
-    if (idx < 0 || idx >= g_library_count)
+    if (idx < 0 || idx >= g_library.count)
         return;
-    row = &g_library_rows[idx];
+    row = &g_library.rows[idx];
     free(row->path);
     free(row->name);
-    memmove(&g_library_rows[idx], &g_library_rows[idx + 1],
-            (size_t)(g_library_count - idx - 1) * sizeof *g_library_rows);
-    g_library_count--;
+    memmove(&g_library.rows[idx], &g_library.rows[idx + 1],
+            (size_t)(g_library.count - idx - 1) * sizeof *g_library.rows);
+    g_library.count--;
     ListView_DeleteItem(g_controls.list, idx);
 
-    if (g_selected_index == idx) {
+    if (g_library.selected_index == idx) {
         player_stop(g_player);
         player_close(g_player);
-        g_selected_index = -1;
+        g_library.selected_index = -1;
         clear_info_panel();
-        if (g_library_count > 0)
+        if (g_library.count > 0)
             ListView_SetItemState(g_controls.list,
-                                  (idx < g_library_count) ? idx : g_library_count - 1,
+                                  (idx < g_library.count) ? idx : g_library.count - 1,
                                   LVIS_SELECTED | LVIS_FOCUSED,
                                   LVIS_SELECTED | LVIS_FOCUSED);
-    } else if (g_selected_index > idx) {
-        g_selected_index--;
+    } else if (g_library.selected_index > idx) {
+        g_library.selected_index--;
     }
 }
 
 /* "Limpiar": stop playback, free every row's strings and empty the list.
- * The g_library_rows buffer itself is kept (capacity reuse across clears; it is
+ * The g_library.rows buffer itself is kept (capacity reuse across clears; it is
  * process-lifetime state like the rest of the globals and is reclaimed by
  * the OS at exit). */
 static void remove_all(void)
 {
     player_stop(g_player);
     player_close(g_player);
-    for (int i = 0; i < g_library_count; i++) {
-        free(g_library_rows[i].path);
-        free(g_library_rows[i].name);
+    for (int i = 0; i < g_library.count; i++) {
+        free(g_library.rows[i].path);
+        free(g_library.rows[i].name);
     }
-    g_library_count = 0;
-    g_selected_index = -1;
+    g_library.count = 0;
+    g_library.selected_index = -1;
     ListView_DeleteAllItems(g_controls.list);
     clear_info_panel();
     set_status(L"Lista vacía.");
@@ -431,11 +431,11 @@ static void browse_files(void)
         MessageBoxW(g_hwnd, box, L"Archivo no válido o ilegible",
                     MB_OK | MB_ICONWARNING);
     }
-    if (added > 0 && g_selected_index < 0 && g_library_count > 0)
+    if (added > 0 && g_library.selected_index < 0 && g_library.count > 0)
         ListView_SetItemState(g_controls.list, 0, LVIS_SELECTED | LVIS_FOCUSED,
                               LVIS_SELECTED | LVIS_FOCUSED);
     if (added > 0) {
-        swprintf(sum, 128, L"%d archivo(s) en la lista.", g_library_count);
+        swprintf(sum, 128, L"%d archivo(s) en la lista.", g_library.count);
         set_status(sum);
     }
 }
@@ -900,11 +900,11 @@ static void update_ui(void)
         if (wcscmp(curPlay, playText) != 0)
             SetWindowTextW(g_controls.btnPlay, playText);
     }
-    EnableWindow(g_controls.btnPlay, g_selected_index >= 0);
-    EnableWindow(g_controls.btnPrevious, g_selected_index >= 0 && s.total_samples > 0);
-    EnableWindow(g_controls.btnNext, g_selected_index >= 0 && g_library_count > 1);
-    EnableWindow(g_controls.btnRemove, g_library_count > 0);
-    EnableWindow(g_controls.btnClear, g_library_count > 0);
+    EnableWindow(g_controls.btnPlay, g_library.selected_index >= 0);
+    EnableWindow(g_controls.btnPrevious, g_library.selected_index >= 0 && s.total_samples > 0);
+    EnableWindow(g_controls.btnNext, g_library.selected_index >= 0 && g_library.count > 1);
+    EnableWindow(g_controls.btnRemove, g_library.count > 0);
+    EnableWindow(g_controls.btnClear, g_library.count > 0);
 
     /* Speed button: caption is the mode in force (like the version button). */
     {
@@ -999,7 +999,7 @@ static void change_track(int idx, int wasPlaying)
 {
     ListView_SetItemState(g_controls.list, idx, LVIS_SELECTED | LVIS_FOCUSED,
                           LVIS_SELECTED | LVIS_FOCUSED);
-    if (g_selected_index != idx)
+    if (g_library.selected_index != idx)
         select_track(idx); /* no LVN_ITEMCHANGED when the row does not change */
     if (wasPlaying && player_get_state(g_player).state != PLAYER_PLAYING)
         player_play(g_player);
@@ -1016,8 +1016,8 @@ static void on_command(int id)
         browse_files();
         break;
     case IDC_BTN_REMOVE:
-        if (g_selected_index >= 0)
-            remove_track(g_selected_index);
+        if (g_library.selected_index >= 0)
+            remove_track(g_library.selected_index);
         break;
     case IDC_BTN_CLEAR:
         remove_all();
@@ -1053,9 +1053,9 @@ static void on_command(int id)
          * over"; at the beginning it means "previous track" (wrapping to
          * the last row). Keeps playing across a track change. */
         PlayerSnapshot s = player_get_state(g_player);
-        int prev = g_selected_index > 0 ? g_selected_index - 1
-                                  : (g_library_count > 0 ? g_library_count - 1 : -1);
-        if (prev >= 0 && prev != g_selected_index && s.sample_rate > 0
+        int prev = g_library.selected_index > 0 ? g_library.selected_index - 1
+                                  : (g_library.count > 0 ? g_library.count - 1 : -1);
+        if (prev >= 0 && prev != g_library.selected_index && s.sample_rate > 0
             && s.position <= 3u * (uint64_t)s.sample_rate) {
             int wasPlaying = s.state == PLAYER_PLAYING;
             change_track(prev, wasPlaying);
@@ -1069,9 +1069,9 @@ static void on_command(int id)
     case IDC_BTN_NEXT: {
         int next;
         int wasPlaying;
-        if (g_selected_index < 0 || g_library_count <= 0)
+        if (g_library.selected_index < 0 || g_library.count <= 0)
             break;
-        next = (g_selected_index + 1) % g_library_count;
+        next = (g_library.selected_index + 1) % g_library.count;
         /* Keep playing across the change if the user was listening. */
         wasPlaying = player_get_state(g_player).state == PLAYER_PLAYING;
         change_track(next, wasPlaying);
@@ -1332,7 +1332,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
 
     load_args(argc, argv);
 
-    if (g_library_count > 0)
+    if (g_library.count > 0)
         ListView_SetItemState(g_controls.list, 0, LVIS_SELECTED | LVIS_FOCUSED,
                               LVIS_SELECTED | LVIS_FOCUSED);
 
@@ -1342,8 +1342,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
             &g_controls,
             g_player,
             &g_player_snapshot,
-            &g_library_count,
-            &g_selected_index,
+            &g_library.count,
+            &g_library.selected_index,
             g_selftest_invalid_path,
             g_has_invalid_path,
             g_selftest_report,

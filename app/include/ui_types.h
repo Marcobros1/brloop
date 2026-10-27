@@ -58,6 +58,16 @@ typedef struct {
     uint32_t loop_start;
 } TrackRow;
 
+/* UI-thread-owned library state. `rows[0..count)` are initialized; the
+ * remaining capacity is reserved for future additions. selected_index is -1
+ * when no row is selected and otherwise always falls within that range. */
+typedef struct {
+    TrackRow *rows;
+    int count;
+    int capacity;
+    int selected_index;
+} LibraryState;
+
 /* Handles are created once during WM_CREATE and remain valid until WM_DESTROY.
  * The struct stores no ownership of the HWND objects themselves. */
 typedef struct {

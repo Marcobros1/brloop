@@ -15,7 +15,9 @@ core/src/dsp_adpcm.c DSP-ADPCM block decoding
 ```
 
 `main.c` must use the public `player.h` API. It must not inspect BRSTM reader
-internals or manipulate decoded samples. `player.c` owns the decode cursor and
+internals or manipulate decoded samples. The UI library is grouped in one
+`LibraryState`: it owns the row array, its capacity and the selected index;
+`selected_index == -1` is the empty-selection state. `player.c` owns the decode cursor and
 is the only component that combines BRSTM blocks, DSP state, loop jumps and
 transport state. `audio_out.c` owns the WinMM device and its `WAVEHDR` buffers.
 
