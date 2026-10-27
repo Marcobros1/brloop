@@ -23,69 +23,9 @@
 #include <wchar.h>
 
 #include "player.h"
-
-#define IDC_LIST         1001
-#define IDC_BTN_OPEN     1002
-#define IDC_BTN_REMOVE   1003
-#define IDC_BTN_CLEAR    1004
-#define IDC_BTN_PLAY     1005
-#define IDC_BTN_HOME     1006   /* previous track (restart when far into it) */
-#define IDC_BTN_NEXT     1007   /* select and play the next library row */
-#define IDC_CHECK_LOOP   1008
-#define IDC_BTN_SPEED    1010   /* one toggle: 1.0x <-> Final Lap */
-#define IDC_BTN_PAIR     1012
-#define IDC_PROGRESS     1014
-#define IDC_VAL_STATE    1015
-#define IDC_VAL_TIME     1016
-#define IDC_VAL_SPEED    1017
-#define IDC_VAL_DEVRATE  1018
-#define IDC_VAL_NAME     1020
-#define IDC_VAL_PATH     1021
-#define IDC_VAL_RATE     1022
-#define IDC_VAL_CH       1023
-#define IDC_VAL_SAMPLES  1024
-#define IDC_VAL_DUR      1025
-#define IDC_VAL_LOOP     1026
-#define IDC_VAL_LOOPST   1027
-#define IDC_CAP_LOOPEND  1028
-#define IDC_VAL_LOOPEND  1029
-#define IDC_CAP_NAME     1030
-#define IDC_CAP_CH       1031
-#define IDC_CAP_RATE     1032
-#define IDC_CAP_DUR      1033
-#define IDC_CAP_SAMPLES  1034
-#define IDC_CAP_LOOP     1035
-#define IDC_CAP_LOOPST   1036
-#define IDC_CAP_PATH     1037
-#define IDC_CAP_VER      1038
-
-#define TIMER_UI 1
-#define UI_TICK_MS 100
-
-typedef struct {
-    wchar_t *path;
-    wchar_t *name;
-    uint32_t rate;
-    uint8_t  channels;
-    uint32_t total;
-    uint8_t  loop;
-    uint32_t loop_start;
-} TrackRow;
-
-typedef struct {
-    HWND list, status;
-    HWND groupLib, groupInfo, groupPlay, groupSpeed;
-    HWND btnOpen, btnRemove, btnClear;
-    HWND btnPlay, btnHome, btnNext;
-    HWND btnSpeed, btnPair;
-    HWND checkLoop, progress;
-    HWND capName, capCh, capRate, capDur, capSamples, capLoop, capLoopSt;
-    HWND capLoopEnd;
-    HWND capPath, capVer;
-    HWND valName, valPath, valRate, valCh, valSamples, valDur;
-    HWND valLoop, valLoopSt, valState, valTime, valSpeed, valDevRate;
-    HWND valLoopEnd;
-} Controls;
+#include "ui_types.h"
+#include "ui_selftest.h"
+#include "cli_options.h"
 
 /* ------------------------------------------------------------- app state --
  * Win32 pattern: one instance of the whole UI lives in file-scope globals
@@ -114,7 +54,6 @@ static int g_decode_reported;          /* decode failure already shown once */
 
 /* Selftest bookkeeping (--selftest). */
 static int g_stMode;             /* running as a scripted self-test */
-static int g_stChecks, g_stFails;/* counters for the final RESULT line */
 static FILE *g_stReport;         /* optional report file (see load_args) */
 static wchar_t g_stInvalid[1024];/* path of a file that must be rejected */
 static int g_hasInvalid;
@@ -187,94 +126,6 @@ static void set_status(const wchar_t *text)
 {
     if (g_ctl.status)
         SendMessageW(g_ctl.status, SB_SETTEXTW, 0, (LPARAM)text);
-}
-
-/* ------------------------------------------------------------ selftest -- */
-
-/* Record one check result: counters, stdout and report file stay in sync so
- * a redirected run and an interactive one show the same results. */
-static void st_check(int ok, const char *name)
-{
-    g_stChecks++;
-    if (!ok) {
-        g_stFails++;
-        fprintf(stdout, "[FAIL] %s\n", name);
-        if (g_stReport)
-            fprintf(g_stReport, "[FAIL] %s\n", name);
-    } else {
-        printf("[PASS] %s\n", name);
-        if (g_stReport)
-            fprintf(g_stReport, "[PASS] %s\n", name);
-    }
-    fflush(stdout);
-    if (g_stReport)
-        fflush(g_stReport);
-}
-
-/* Run the message loop for `ms` milliseconds. The selftest uses it instead
- * of Sleep so window messages, timers and the engine callbacks keep being
- * processed while waiting - a bare sleep would freeze the UI under test. */
-static void pump(DWORD ms)
-{
-    DWORD deadline = GetTickCount() + ms;
-    MSG msg;
-    do {
-        while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
-        Sleep(1);
-    } while (GetTickCount() < deadline);
-}
-
-/* Pump messages until the player reaches `want` or the timeout expires.
- * Returns the final answer, so callers can assert on it (a timeout is a
- * failed check, not a hang). */
-static int wait_state(PlayerState want, DWORD timeout_ms)
-{
-    DWORD deadline = GetTickCount() + timeout_ms;
-    do {
-        PlayerSnapshot s = player_get_state(g_player);
-        if (s.state == want)
-            return 1;
-        pump(10);
-    } while (GetTickCount() < deadline);
-    return player_get_state(g_player).state == want;
-}
-
-/* Simulate a button click by sending the exact WM_COMMAND the control
- * itself would send - the selftest therefore exercises the same
- * on_command() path as a real click, not a private test entry point. */
-static void send_cmd(int id)
-{
-    SendMessageW(g_hwnd, WM_COMMAND, MAKEWPARAM(id, BN_CLICKED), 0);
-}
-
-/* Diagnostics go to stdout and, when requested, to the report file: stdout
- * is re-routed to the parent console by AttachConsole, so the report is the
- * only reliable channel when output is redirected. */
-static void st_logf(const char *fmt, ...)
-{
-    char line[512];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(line, sizeof line, fmt, ap);
-    va_end(ap);
-    printf("%s", line);
-    fflush(stdout);
-    if (g_stReport) {
-        fputs(line, g_stReport);
-        fflush(g_stReport);
-    }
-}
-
-/* Handle count at a phase boundary: written to the report so a leak check
- * failure can be traced to the phase that grew, instead of guessing. */
-static void st_log_handles(const char *tag)
-{
-    DWORD h = 0;
-    GetProcessHandleCount(GetCurrentProcess(), &h);
-    st_logf("handles %s: %lu\n", tag, (unsigned long)h);
 }
 
 /* ---------------------------------------------------------------- rows -- */
@@ -588,7 +439,6 @@ static void browse_files(void)
 /* Custom progress bar: the loop section [loop_start, total) is shaded and a
  * marker line shows the loop start, so both loop points are visible while
  * the song plays. Paint state is UI-thread-only (set in update_ui). */
-#define PROGRESS_CLASS_NAME L"MkwProgress"
 
 static uint64_t g_prog_position;
 static uint64_t g_prog_total;
@@ -808,7 +658,7 @@ static void layout(void)
     y = m + infoH + g;
     move_ctl(g_ctl.groupPlay, rightX, y, rightW, playH);
     move_ctl(g_ctl.btnPlay, rightX + 12, y + 22, 104, 28);
-    move_ctl(g_ctl.btnHome, rightX + 124, y + 22, 84, 28);
+    move_ctl(g_ctl.btnPrevious, rightX + 124, y + 22, 84, 28);
     move_ctl(g_ctl.btnNext, rightX + 216, y + 22, 96, 28);
     move_ctl(g_ctl.progress, rightX + 12, y + 58, rightW - 24 - 176, 16);
     move_ctl(g_ctl.valState, rightX + rightW - 12 - 164, y + 56, 164, 20);
@@ -938,8 +788,8 @@ static void create_controls(HWND parent)
      * row. There is deliberately no separate stop button. */
     g_ctl.btnPlay = make_ctl(parent, 0, L"BUTTON", L"Reproducir",
                              0, IDC_BTN_PLAY, 0, 0, 0, 0);
-    g_ctl.btnHome = make_ctl(parent, 0, L"BUTTON", L"Anterior",
-                             0, IDC_BTN_HOME, 0, 0, 0, 0);
+    g_ctl.btnPrevious = make_ctl(parent, 0, L"BUTTON", L"Anterior",
+                             0, IDC_BTN_PREVIOUS, 0, 0, 0, 0);
     g_ctl.btnNext = make_ctl(parent, 0, L"BUTTON", L"Siguiente",
                              0, IDC_BTN_NEXT, 0, 0, 0, 0);
     g_ctl.progress = make_ctl(parent, 0, PROGRESS_CLASS_NAME, L"",
@@ -970,7 +820,7 @@ static void create_controls(HWND parent)
 
     layout();
     EnableWindow(g_ctl.btnPlay, FALSE);
-    EnableWindow(g_ctl.btnHome, FALSE);
+    EnableWindow(g_ctl.btnPrevious, FALSE);
     EnableWindow(g_ctl.btnNext, FALSE);
     EnableWindow(g_ctl.btnRemove, FALSE);
     EnableWindow(g_ctl.btnClear, FALSE);
@@ -1045,7 +895,7 @@ static void update_ui(void)
             SetWindowTextW(g_ctl.btnPlay, playText);
     }
     EnableWindow(g_ctl.btnPlay, g_selected >= 0);
-    EnableWindow(g_ctl.btnHome, g_selected >= 0 && s.total_samples > 0);
+    EnableWindow(g_ctl.btnPrevious, g_selected >= 0 && s.total_samples > 0);
     EnableWindow(g_ctl.btnNext, g_selected >= 0 && g_rowCount > 1);
     EnableWindow(g_ctl.btnRemove, g_rowCount > 0);
     EnableWindow(g_ctl.btnClear, g_rowCount > 0);
@@ -1193,7 +1043,7 @@ static void on_command(int id)
         }
         break;
     }
-    case IDC_BTN_HOME: {
+    case IDC_BTN_PREVIOUS: {
         /* Media-player rule: more than 3 s into the song means "start it
          * over"; at the beginning it means "previous track" (wrapping to
          * the last row). Keeps playing across a track change. */
@@ -1363,467 +1213,48 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     }
 }
 
-/* ------------------------------------------------------------ selftest -- */
-
-/* Process working set in bytes (selftest leak check; 0 if the API fails,
- * which the check then tolerates rather than reporting a false leak). */
-static SIZE_T working_set(void)
-{
-    PROCESS_MEMORY_COUNTERS pmc;
-    if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof pmc))
-        return pmc.WorkingSetSize;
-    return 0;
-}
-
-/* Resource baselines for the leak checks: taken before the first play
- * (phase 2) and compared after the cycles and after window close (run at
- * the end). File-scope because the phases are separate functions. */
-static DWORD g_stHandles0;
-static SIZE_T g_stMem0;
-
-/* Phase 1 - library: the custom progress class is in use, an invalid file
- * is rejected without entering the list, and selecting the first row opens
- * it and fills the metadata (same handler as a real click). */
-static void st_phase_library(void)
-{
-    /* The progress control must be our loop-aware custom class. */
-    {
-        wchar_t cls[64] = L"";
-        GetClassNameW(g_ctl.progress, cls, 64);
-        st_check(wcscmp(cls, PROGRESS_CLASS_NAME) == 0,
-                 "progress control uses the loop-aware custom class");
-    }
-
-    /* Invalid file must be rejected without entering the list. */
-    if (g_hasInvalid) {
-        wchar_t err[1024];
-        int before = g_rowCount;
-        int rc = add_track(g_stInvalid, err, 1024);
-        st_check(rc != 0 && g_rowCount == before,
-                 "invalid file rejected with error message");
-    }
-
-    /* Select first track (same handler as a click). */
-    ListView_SetItemState(g_ctl.list, 0, LVIS_SELECTED | LVIS_FOCUSED,
-                          LVIS_SELECTED | LVIS_FOCUSED);
-    pump(50);
-    st_check(g_selected == 0 && g_snap.sample_rate > 0,
-             "selection opens track and fills metadata");
-}
-
-/* Phase 2 - transport: play reaches PLAYING with the device open, the API
- * stays responsive while the engine decodes (100 ms budget on
- * player_get_state), and pause freezes the position before resume. Also
- * records the resource baselines used by the final leak checks. */
-static void st_phase_transport(void)
-{
-    int i;
-
-    /* Play: real audio path. */
-    GetProcessHandleCount(GetCurrentProcess(), &g_stHandles0);
-    g_stMem0 = working_set();
-    send_cmd(IDC_BTN_PLAY);
-    st_check(wait_state(PLAYER_PLAYING, 4000), "play reaches PLAYING");
-    st_check(player_get_state(g_player).audio_error == 0,
-             "audio device opened without error");
-
-    /* UI thread responsiveness while the engine plays. */
-    {
-        LARGE_INTEGER f, t0, t1, worst;
-        double worst_ms;
-        QueryPerformanceFrequency(&f);
-        worst.QuadPart = 0;
-        for (i = 0; i < 50; i++) {
-            QueryPerformanceCounter(&t0);
-            (void)player_get_state(g_player);
-            QueryPerformanceCounter(&t1);
-            if (t1.QuadPart - t0.QuadPart > worst.QuadPart)
-                worst.QuadPart = t1.QuadPart - t0.QuadPart;
-            Sleep(0);
-        }
-        worst_ms = 1000.0 * (double)worst.QuadPart / (double)f.QuadPart;
-        printf("  max player_get_state latency: %.3f ms\n", worst_ms);
-        st_check(worst_ms < 100.0,
-                 "engine API answers in <100 ms while playing");
-    }
-
-    /* Pause / resume through the single play button, with position
-     * stability and a caption that announces the next click. */
-    {
-        wchar_t cap[32] = L"";
-        GetWindowTextW(g_ctl.btnPlay, cap, 32);
-        st_check(wcscmp(cap, L"Pausar") == 0,
-                 "play button offers pause while playing");
-    }
-    send_cmd(IDC_BTN_PLAY);
-    st_check(wait_state(PLAYER_PAUSED, 2000), "pause reaches PAUSED");
-    {
-        wchar_t cap[32] = L"";
-        uint64_t p0 = player_get_state(g_player).position;
-        pump(300);
-        uint64_t p1 = player_get_state(g_player).position;
-        st_check(p0 == p1, "position frozen while paused");
-        GetWindowTextW(g_ctl.btnPlay, cap, 32);
-        st_check(wcscmp(cap, L"Reanudar") == 0,
-                 "play button offers resume while paused");
-    }
-    send_cmd(IDC_BTN_PLAY);
-    st_check(wait_state(PLAYER_PLAYING, 2000), "resume reaches PLAYING");
-}
-
-/* Phase 3 - seek, speed, loop: a click at 3/4 of the bar seeks into
- * 55..80% and playback continues from there; the speed toggle switches
- * 1.0x <-> Final Lap and back with a matching caption; "Anterior" restarts a
- * song that is more than 3 s in; the loop checkbox (emulating a real click
- * on the BS_AUTOCHECKBOX) flips the engine flag and restores it. */
-static void st_phase_seek_speed(void)
-{
-    /* Seek: a click on the progress bar jumps near that point and the
-     * playback keeps going from there. */
-    {
-        RECT rc;
-        int x;
-        PlayerSnapshot s1, s2;
-
-        GetClientRect(g_ctl.progress, &rc);
-        x = (rc.right - rc.left) * 3 / 4;
-        SendMessageW(g_ctl.progress, WM_LBUTTONDOWN, 0, MAKELPARAM(x, 8));
-        SendMessageW(g_ctl.progress, WM_LBUTTONUP, 0, MAKELPARAM(x, 8));
-        pump(100);
-        s1 = player_get_state(g_player);
-        st_check(s1.position > s1.total_samples * 55 / 100
-                 && s1.position < s1.total_samples * 80 / 100,
-                 "click on the progress bar seeks near that point");
-        pump(900);
-        s2 = player_get_state(g_player);
-        st_check(s2.state == PLAYER_PLAYING && s2.position > s1.position,
-                 "playback continues from the seeked position");
-    }
-
-    /* Speed toggle: 1.0x -> Final Lap -> 1.0x; the button caption always
-     * announces the mode in force (single toggle, no pair of buttons). */
-    send_cmd(IDC_BTN_SPEED);
-    pump(500);
-    {
-        PlayerSnapshot s = player_get_state(g_player);
-        uint32_t want = player_device_rate(s.sample_rate,
-                                           PLAYER_FLSM_SPEED_PPM);
-        wchar_t cap[64] = L"";
-        st_check(s.state == PLAYER_PLAYING && s.device_rate == want,
-                 "FLSM speed applied live, device rate matches floor(rate*k)");
-        GetWindowTextW(g_ctl.btnSpeed, cap, 64);
-        st_check(wcsstr(cap, L"Final Lap") != NULL,
-                 "speed button caption shows Final Lap");
-    }
-    send_cmd(IDC_BTN_SPEED);
-    pump(500);
-    {
-        PlayerSnapshot s = player_get_state(g_player);
-        wchar_t cap[64] = L"";
-        st_check(s.state == PLAYER_PLAYING && s.device_rate == s.sample_rate,
-                 "second press restores the 1.0x device rate");
-        GetWindowTextW(g_ctl.btnSpeed, cap, 64);
-        st_check(wcsstr(cap, L"1,0") != NULL,
-                 "speed button caption shows 1,0x again");
-    }
-
-    /* Anterior far into the song (>3 s, we are at ~75%): restarts the
-     * current track instead of changing it. */
-    {
-        int rowBefore = g_selected;
-        send_cmd(IDC_BTN_HOME);
-        pump(200);
-        PlayerSnapshot s = player_get_state(g_player);
-        st_check(s.state == PLAYER_PLAYING && s.position < s.sample_rate
-                 && g_selected == rowBefore,
-                 "restarts the song when far into it");
-    }
-
-    /* Loop toggle (only if the file has loop metadata). */
-    {
-        PlayerSnapshot s = player_get_state(g_player);
-        if (s.file_loop) {
-            int before = s.loop_enabled;
-            int boxBefore =
-                SendMessageW(g_ctl.checkLoop, BM_GETCHECK, 0, 0)
-                    == BST_CHECKED;
-            /* The handler reads the checkbox (correct for a real click on a
-             * BS_AUTOCHECKBOX, which flips the box before BN_CLICKED is
-             * delivered); emulate that click instead of only sending the
-             * command, and verify box and engine start in sync. */
-            st_check(boxBefore == (before != 0),
-                     "loop checkbox matches the engine state");
-            SendMessageW(g_ctl.checkLoop, BM_SETCHECK,
-                         boxBefore ? BST_UNCHECKED : BST_CHECKED, 0);
-            send_cmd(IDC_CHECK_LOOP);
-            pump(50);
-            s = player_get_state(g_player);
-            st_check(s.loop_enabled != before, "loop toggle flips the flag");
-            SendMessageW(g_ctl.checkLoop, BM_SETCHECK,
-                         boxBefore ? BST_CHECKED : BST_UNCHECKED, 0);
-            send_cmd(IDC_CHECK_LOOP);
-            pump(50);
-        } else {
-            st_check(1, "no-loop file: loop control left disabled");
-        }
-    }
-}
-
-/* Phase 4 - track switch and version (channel-pair) selection: switching
- * while playing stops cleanly; the 4-channel second track exposes 2 pairs;
- * the button cycles 1 -> 2 -> mix, its caption matches, and switching
- * versions live (device reopen path) keeps playback running without audio
- * errors. */
-static void st_phase_pair(void)
-{
-    /* Track switch while playing: playback must stop cleanly. */
-    ListView_SetItemState(g_ctl.list, 1, LVIS_SELECTED | LVIS_FOCUSED,
-                          LVIS_SELECTED | LVIS_FOCUSED);
-    st_check(wait_state(PLAYER_STOPPED, 2000),
-             "switching track while playing stops playback");
-    st_check(g_selected == 1, "second track selected");
-    st_log_handles("row 2 opened (stopped)");
-
-    /* Version (channel pair) selection on the 4-channel second track. */
-    {
-        PlayerSnapshot s = player_get_state(g_player);
-        st_check(s.channels == 4 && s.pair_count == 2,
-                 "4-channel file exposes 2 channel pairs");
-        send_cmd(IDC_BTN_PAIR);
-        pump(50);
-        s = player_get_state(g_player);
-        st_check(s.pair_sel == 0, "version button selects pair 1");
-        send_cmd(IDC_BTN_PAIR);
-        pump(50);
-        s = player_get_state(g_player);
-        st_check(s.pair_sel == 1, "second press selects pair 2");
-        {
-            wchar_t cap[64] = L"";
-            GetWindowTextW(g_ctl.btnPair, cap, 64);
-            st_check(wcsstr(cap, L"Versión 2") != NULL,
-                     "button caption shows the selected version");
-        }
-        send_cmd(IDC_BTN_PAIR);
-        pump(50);
-        s = player_get_state(g_player);
-        st_check(s.pair_sel == -1, "third press returns to all channels");
-        st_log_handles("pair cycle while stopped");
-
-        /* Live switch: a version is chosen while audio is playing. */
-        send_cmd(IDC_BTN_PAIR);
-        pump(50); /* pair 1 selected */
-        send_cmd(IDC_BTN_PLAY);
-        st_check(wait_state(PLAYER_PLAYING, 4000),
-                 "play with a version selected");
-        send_cmd(IDC_BTN_PAIR);
-        pump(150); /* pair 2 selected */
-        s = player_get_state(g_player);
-        st_check(s.state == PLAYER_PLAYING && s.pair_sel == 1,
-                 "version switches live while playing");
-        send_cmd(IDC_BTN_PAIR);
-        pump(150); /* back to all channels */
-        s = player_get_state(g_player);
-        st_check(s.state == PLAYER_PLAYING && s.pair_sel == -1
-                 && s.audio_error == 0,
-                 "mix-all restored live without audio errors");
-        st_log_handles("after live pair switches");
-
-        /* Siguiente: from the last row it wraps to the first one and keeps
-         * playing, because the user was listening. */
-        {
-            /* Guarded: a bare --selftest without files leaves the library
-             * empty and the checks below must fail, not crash. */
-            int expect = g_rowCount > 0 ? (g_selected + 1) % g_rowCount : -1;
-            send_cmd(IDC_BTN_NEXT);
-            st_check(wait_state(PLAYER_PLAYING, 4000)
-                     && g_selected == expect,
-                     "next button advances the track and keeps playing");
-            st_log_handles("after next (playing)");
-        }
-
-        /* Anterior with the song just opened (position ~0) goes back to the
-         * previous track - wrapping to the last row - and keeps playing. */
-        {
-            int expect = g_selected > 0 ? g_selected - 1 : g_rowCount - 1;
-            send_cmd(IDC_BTN_HOME);
-            st_check(wait_state(PLAYER_PLAYING, 4000)
-                     && g_selected == expect,
-                     "previous button goes back and keeps playing");
-            st_log_handles("after previous (playing)");
-        }
-
-        /* No stop button: pause instead, so the leak cycles start from a
-         * known state. */
-        send_cmd(IDC_BTN_PLAY);
-        st_check(wait_state(PLAYER_PAUSED, 2000),
-                 "pause after the version checks");
-        st_log_handles("after pause (row reopened)");
-    }
-}
-
-/* One full transport round on the current track: three play/seek/rewind/
- * pause cycles through the single play button and the previous button, then
- * a track switch (the file and the device are closed and reopened, the
- * heaviest allocation path left now that there is no stop button). Ends
- * stopped on the other row, which is exactly the state it starts from, so
- * two rounds are comparable. */
-static void st_transport_round(void)
-{
-    int i;
-
-    for (i = 0; i < 3; i++) {
-        RECT rc;
-        int x;
-
-        send_cmd(IDC_BTN_PLAY); /* resume (round starts paused/stopped) */
-        wait_state(PLAYER_PLAYING, 4000);
-        /* Jump into the last quarter so the >3 s rule of "Anterior" makes it
-         * rewind the current track instead of changing row. */
-        GetClientRect(g_ctl.progress, &rc);
-        x = (rc.right - rc.left) * 3 / 4;
-        SendMessageW(g_ctl.progress, WM_LBUTTONDOWN, 0, MAKELPARAM(x, 8));
-        SendMessageW(g_ctl.progress, WM_LBUTTONUP, 0, MAKELPARAM(x, 8));
-        pump(50);
-        send_cmd(IDC_BTN_HOME);
-        pump(50);
-        send_cmd(IDC_BTN_PLAY); /* pause */
-        wait_state(PLAYER_PAUSED, 2000);
-    }
-    ListView_SetItemState(g_ctl.list, g_selected == 0 ? 1 : 0,
-                          LVIS_SELECTED | LVIS_FOCUSED,
-                          LVIS_SELECTED | LVIS_FOCUSED);
-    wait_state(PLAYER_STOPPED, 2000);
-    pump(100);
-}
-
-/* Scripted end-to-end session: every phase asserts the behaviour a user
- * exercises by hand, then the leak checks compare handle/memory counts
- * against the baselines taken at the first play. Returns the process exit
- * code (0 = every check passed). */
-static int run_selftest(void)
-{
-    DWORD handles1, handlesB, handles2;
-    SIZE_T mem1, memB;
-
-    printf("selftest: %d track(s)%s\n", g_rowCount,
-           g_hasInvalid ? " + invalid file" : "");
-    if (g_stReport)
-        fprintf(g_stReport, "selftest: %d track(s)%s\n", g_rowCount,
-                g_hasInvalid ? " + invalid file" : "");
-
-    st_check(g_rowCount >= 2, "at least 2 tracks loaded");
-    st_phase_library();
-    st_log_handles("after library");
-    st_phase_transport();
-    st_log_handles("after transport");
-    st_phase_seek_speed();
-    st_log_handles("after seek/speed");
-    st_phase_pair();
-    st_log_handles("after pair");
-
-    /* Leak check by repetition: two identical transport rounds, both
-     * measured in the same state (stopped, other row, device open) after
-     * every format of the session has been exercised. Measured behaviour:
-     * the first 4-channel open costs ~19 handles once (winmm format setup)
-     * and no later operation grows, so the meaningful number is the delta
-     * between round 1 and round 2, which is where a leak would show. */
-    st_transport_round();
-    GetProcessHandleCount(GetCurrentProcess(), &handles1);
-    mem1 = working_set();
-    st_transport_round();
-    GetProcessHandleCount(GetCurrentProcess(), &handlesB);
-    memB = working_set();
-    st_logf("handles after round1 %lu, round2 %lu (first-play base %lu), "
-            "working set +%.1f MB\n",
-            (unsigned long)handles1, (unsigned long)handlesB,
-            (unsigned long)g_stHandles0,
-            ((double)memB - (double)g_stMem0) / (1024.0 * 1024.0));
-    st_check(handlesB <= handles1 + 8,
-             "no handle growth across play/pause cycles");
-    st_check(memB <= mem1 + 8u * 1024u * 1024u,
-             "memory growth under 8 MB across cycles");
-
-    /* Cleanup: close the real window and compare resources. */
-    SendMessageW(g_hwnd, WM_CLOSE, 0, 0);
-    {
-        MSG msg;
-        for (;;) {
-            if (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
-                if (msg.message == WM_QUIT)
-                    break;
-                TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-            } else {
-                Sleep(5);
-            }
-        }
-    }
-    pump(100);
-    GetProcessHandleCount(GetCurrentProcess(), &handles2);
-    st_logf("handles after window close: %lu (base %lu)\n",
-            (unsigned long)handles2, (unsigned long)g_stHandles0);
-    st_check(handles2 <= g_stHandles0 + 8,
-             "closing the window releases resources");
-
-    printf("RESULT: %s (%d checks, %d failed)\n",
-           g_stFails ? "FAIL" : "PASS", g_stChecks, g_stFails);
-    if (g_stReport) {
-        fprintf(g_stReport, "RESULT: %s (%d checks, %d failed)\n",
-                g_stFails ? "FAIL" : "PASS", g_stChecks, g_stFails);
-        fclose(g_stReport);
-        g_stReport = NULL;
-    }
-    return g_stFails ? 1 : 0;
-}
-
 /* ---------------------------------------------------------------- main -- */
 
-/* Argument parsing for the CLI (paths = tracks to preload; --selftest starts
- * the scripted session; --invalid names a file that must be rejected;
- * --report redirects the results). Runs after the window exists because
- * add_track needs the ListView. Two safety rules here: the report file is
- * only opened when --selftest is present (otherwise --report alone would
- * truncate an arbitrary file of the user), and both option paths are
- * length-checked before wcscpy_s, which aborts on an overflowing source. */
+static int cli_add_track(void *context, const wchar_t *path,
+                         wchar_t *error, size_t error_length)
+{
+    (void)context;
+    return add_track(path, error, error_length);
+}
+
+static void cli_report_error(void *context, const wchar_t *message)
+{
+    (void)context;
+    if (wcsncmp(message, L"Ruta de --invalid", 18) == 0)
+        set_status(message);
+    else
+        MessageBoxW(NULL, message, L"Archivo no válido o ilegible",
+                    MB_OK | MB_ICONWARNING);
+}
+
+/* Parse command-line options after the window exists so positional BRSTM
+ * paths can be inserted into the ListView. The report remains unopened until
+ * parsing finishes and only opens when --selftest was explicitly requested. */
 static void load_args(int argc, wchar_t **argv)
 {
-    wchar_t reportPath[1024];
-    int hasReport = 0;
-    int i;
+    CliOptions options;
+    CliParseCallbacks callbacks = {
+        cli_add_track,
+        cli_report_error,
+        NULL
+    };
 
-    reportPath[0] = L'\0';
-    for (i = 1; i < argc; i++) {
-        if (wcscmp(argv[i], L"--selftest") == 0) {
-            g_stMode = 1;
-        } else if (wcscmp(argv[i], L"--invalid") == 0 && i + 1 < argc) {
-            const wchar_t *p = argv[++i];
-            if (wcslen(p) < sizeof g_stInvalid / sizeof *g_stInvalid) {
-                wcscpy_s(g_stInvalid,
-                         sizeof g_stInvalid / sizeof *g_stInvalid, p);
-                g_hasInvalid = 1;
-            } else {
-                set_status(L"Ruta de --invalid demasiado larga: ignorada.");
-            }
-        } else if (wcscmp(argv[i], L"--report") == 0 && i + 1 < argc) {
-            const wchar_t *p = argv[++i];
-            if (wcslen(p) < sizeof reportPath / sizeof *reportPath) {
-                wcscpy_s(reportPath,
-                         sizeof reportPath / sizeof *reportPath, p);
-                hasReport = 1;
-            }
-        } else {
-            wchar_t err[1024];
-            if (add_track(argv[i], err, 1024) != 0 && !g_stMode)
-                MessageBoxW(NULL, err, L"Archivo no válido o ilegible",
-                            MB_OK | MB_ICONWARNING);
-        }
-    }
+    cli_options_parse(argc, argv, &options, &callbacks);
+    g_stMode = options.selftest;
+    g_hasInvalid = options.has_invalid_path;
+    if (g_hasInvalid)
+        wcscpy_s(g_stInvalid, sizeof g_stInvalid / sizeof *g_stInvalid,
+                 options.invalid_path);
 
-    /* Open the report only for a real selftest run. Narrow fprintf() on a
-     * ccs=UTF-8 stream aborts on this CRT (measured: 0xC0000409 in the test
-     * harness), so the report is plain text. */
-    if (g_stMode && hasReport)
-        g_stReport = _wfopen(reportPath, L"w");
+    /* Narrow fprintf() on a ccs=UTF-8 stream aborts on this CRT, so the
+     * report is plain text and is opened only for a selftest run. */
+    if (options.selftest && options.has_report_path)
+        g_stReport = _wfopen(options.report_path, L"w");
 }
 
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
@@ -1906,7 +1337,25 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
                               LVIS_SELECTED | LVIS_FOCUSED);
 
     if (g_stMode) {
-        rc = run_selftest();
+        UiSelfTestContext test = {
+            g_hwnd,
+            &g_ctl,
+            g_player,
+            &g_snap,
+            &g_rowCount,
+            &g_selected,
+            g_stInvalid,
+            g_hasInvalid,
+            g_stReport,
+            cli_add_track,
+            NULL,
+            0,
+            0,
+            0,
+            0
+        };
+        rc = ui_selftest_run(&test);
+        g_stReport = NULL;
         LocalFree(argv);
         return rc;
     }

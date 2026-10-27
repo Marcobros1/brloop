@@ -33,8 +33,10 @@ $srcCommon = (@(
     (Join-Path $core 'src\brstm.c'),
     (Join-Path $core 'src\dsp_adpcm.c'),
     (Join-Path $root 'src\player.c'),
-    (Join-Path $root 'src\audio_out.c')
+    (Join-Path $root 'src\audio_out.c'),
+    (Join-Path $root 'src\cli_options.c')
 ) | ForEach-Object { '"' + $_ + '"' }) -join ' '
+$srcUi = '"' + (Join-Path $root 'src\ui_selftest.c') + '"'
 # /utf-8: source and wide literals are UTF-8 (Spanish UI strings);
 # UNICODE: wide Win32 API; winmm = waveOut, comctl32/comdlg32 = controls
 # and the open-file dialog.
@@ -53,7 +55,8 @@ $lines = @(
     ('cd /d "' + $build + '"'),
     # /Fe must precede /link: after /link every token goes to the linker,
     # which ignores it and names the output after the first source file.
-    ($playerFlags + $srcCommon + ' "' + (Join-Path $root 'src\main.c') + '"' +
+    ($playerFlags + $srcCommon + ' ' + $srcUi + ' "' +
+     (Join-Path $root 'src\main.c') + '"' +
      ' /Fe:brstm_player.exe' + $playerLink),
     ('if errorlevel 1 exit /b 1'),
     ($playerFlags + $srcCommon + ' ' + $wav + ' "' +
