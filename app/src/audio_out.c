@@ -39,12 +39,9 @@ static void remember_rejected(uint32_t rate, uint16_t channels)
     }
 }
 
-/* Open the device in three steps: native format if known-good or untested;
- * on a >2ch rejection, remember it and fall back to stereo + folded=1 (the
- * source channels are then mixed at write time); if even stereo fails,
- * return the error with open=0. Buffers are allocated last so any failure
- * before that leaves no allocations behind (and audio_close is idempotent
- * for the partial-open path). */
+/* Try the requested format, cache multichannel rejections, and retry stereo
+ * with folded=1 when needed. Allocate buffers only after the device opens so
+ * every failed path remains safe for the idempotent audio_close call. */
 MMRESULT audio_open(AudioOut *a, uint16_t channels, uint32_t rate,
                     uint32_t slot_frames, HANDLE done_event)
 {
@@ -168,10 +165,9 @@ MMRESULT audio_write(AudioOut *a, uint32_t slot, const int16_t *pcm,
 
     WAVEHDR *h = &a->headers[slot];
     if (a->folded) {
-        /* Fold N interleaved source channels to stereo: even-indexed
-         * channels (FL, BL/SL, ...) to the left, odd-indexed (FR, BR/SR,
-         * ...) to the right, each averaged to avoid clipping. Layout
-         * assumption: standard L R L2 R2 ordering; documented in T2. */
+        /* Fold interleaved source channels to stereo by averaging even-indexed
+         * channels into left and odd-indexed channels into right. This assumes
+         * the adjacent L/R pair ordering observed in the validated MKW files. */
         const uint32_t sc = a->channels;
         const uint32_t nl = (sc + 1) / 2;
         const uint32_t nr = sc / 2;

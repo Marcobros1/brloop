@@ -195,8 +195,17 @@ static BrstmStatus parse_head_part1(FILE *f, const RstmHeader *h,
         return fail(err, errlen, BRSTM_ERR_PARAMS,
                     "block size %u smaller than one DSP frame",
                     info->block_size);
+    if (info->block_size > BRSTM_MAX_BLOCK_SIZE)
+        return fail(err, errlen, BRSTM_ERR_PARAMS,
+                    "block size %u above the supported maximum %u",
+                    info->block_size, (unsigned)BRSTM_MAX_BLOCK_SIZE);
     if (info->samples_per_block == 0)
         return fail(err, errlen, BRSTM_ERR_PARAMS, "samples per block is zero");
+    if (info->samples_per_block > BRSTM_MAX_SAMPLES_PER_BLOCK)
+        return fail(err, errlen, BRSTM_ERR_PARAMS,
+                    "samples per block %u above the supported maximum %u",
+                    info->samples_per_block,
+                    (unsigned)BRSTM_MAX_SAMPLES_PER_BLOCK);
     if (info->block_count > 1) {
         if (info->final_block_size_nopad == 0
             || info->final_block_size_nopad > info->block_size)
@@ -313,6 +322,8 @@ BrstmStatus brstm_open(const char *path, Brstm *out, char *err, size_t errlen)
         fclose(f);
         return fail(err, errlen, BRSTM_ERR_IO, "cannot seek '%s'", path);
     }
+    /* ftell returns long here; on Windows this limits supported files to
+     * below 2 GiB until the parser moves to 64-bit file offsets. */
     long fsize = ftell(f);
     if (fsize < 0) {
         fclose(f);

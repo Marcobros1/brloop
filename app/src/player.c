@@ -186,10 +186,9 @@ static void reset_decode_locked(Player *p)
     p->cursor = 0;
 }
 
-/* Move the cursor back to `sample`. The audio queue is at most one block
- * deep, so the target is always inside the current or the previous block;
- * otherwise the position is kept (a bounded skip) instead of guessing a
- * decoder state. */
+/* Move the cursor back to `sample` when its decoder state is still cached.
+ * Only the current block and the previous block are retained; a farther seek
+ * must use the exact-state reconstruction path below. */
 static int rewind_to_locked(Player *p, uint32_t sample)
 {
     uint32_t block = brstm_block_for_sample(&p->brstm, sample);
@@ -542,10 +541,10 @@ Player *player_create(int enable_audio)
     return p;
 }
 
-/* Stop the engine thread first (it may hold buffers we are about to free),
- * then close device/file, then release everything. The 5 s join timeout is
- * only a last-resort against a wedged winmm call; the thread has no path
- * that blocks on the UI, so it exits promptly in practice. */
+/* Stop the engine thread before freeing buffers or closing waveOut. The 5 s
+ * wait is a last resort for a wedged winmm call; if it expires, deliberately
+ * leak the player because the live thread may still access its buffers or
+ * handle. The process caller can then exit without risking a use-after-free. */
 void player_destroy(Player *p)
 {
     if (!p)
@@ -553,7 +552,8 @@ void player_destroy(Player *p)
     if (p->thread) {
         InterlockedExchange(&p->thread_exit, 1);
         SetEvent(p->stop_event);
-        WaitForSingleObject(p->thread, 5000);
+        if (WaitForSingleObject(p->thread, 5000) != WAIT_OBJECT_0)
+            return; /* Keep the live thread's owner allocated. */
         CloseHandle(p->thread);
         p->thread = NULL;
     }
@@ -580,12 +580,10 @@ void player_destroy(Player *p)
     free(p);
 }
 
-/* Open a new file: shut down whatever played, parse into a temporary Brstm
- * and only then swap it in, so a rejected file leaves the previous state
- * untouched apart from being closed (buffers are allocated before the swap
- * for the same reason: no error path can leave a dangling Brstm in *p).
- * Resets all runtime state; the device is reopened to match channel count
- * and rate. Returns a BrstmStatus on parse failure, -1 on OOM. */
+/* Open a new file after closing the current file and device. Parse into a
+ * temporary Brstm and allocate its buffers before swapping it into the
+ * player, so a parse or allocation failure leaves no dangling Brstm. A failed
+ * open therefore leaves the player closed, not on the previous track. */
 int player_open(Player *p, const char *path, char *err, size_t errlen)
 {
     lock(p);

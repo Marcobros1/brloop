@@ -17,6 +17,16 @@ extern "C" {
 
 #define BRSTM_MAX_CHANNELS 16
 
+/* Upper bounds for the two header fields that size every allocation and
+ * every layout computation. Measured over the 301-file reference collection:
+ * every file uses block_size=8192 and samples_per_block=14336, so these
+ * limits keep 8x/4.5x headroom for other encoders while bounding
+ * malloc(block_size) and malloc(spb*channels*2) and keeping
+ * (block_count-1)*block_size*channels well below UINT64_MAX, which is what
+ * makes the data-need pre-check in brstm_open() immune to wrap-around. */
+#define BRSTM_MAX_BLOCK_SIZE 65536u          /* 64 KiB */
+#define BRSTM_MAX_SAMPLES_PER_BLOCK 65536u   /* 65536 samples */
+
 /* Each BRSTM channel info block stores 16 int16 coefficients = 8 predictor
  * pairs. Observed max predictor index in real files is 7. */
 #define BRSTM_DSP_PREDICTORS 8
@@ -67,6 +77,8 @@ typedef struct {
 
 typedef struct {
     FILE     *file;
+    /* The current parser uses long/ftell, so files at or above 2 GiB are not
+     * supported on Windows where long remains 32-bit. */
     long      file_size;
     uint32_t  adpc_entries_offset;     /* absolute offset of ADPC entry 0 */
     BrstmInfo info;

@@ -14,7 +14,7 @@ and against controlled invalid-file cases.
 
     powershell -ExecutionPolicy Bypass -File tests\run_verification.ps1
 
-Builds `core/`, then runs 176 checks. Add `-SkipBuild` to reuse the compiled
+Builds `core/`, then runs 180 checks. Add `-SkipBuild` to reuse the compiled
 tools. Exit code 0 = all checks passed. Temporary WAVs go to
 `%LOCALAPPDATA%\Temp\opencode\t1_verify` and are deleted per case.
 
@@ -31,7 +31,7 @@ tools. Exit code 0 = all checks passed. Temporary WAVs go to
    table is zeroed (`o_FanfareGP1_32`, `STRM_N_KOOPA_N`).
 4. Peak decode memory below half the full PCM size: the song is never
    pre-decoded in full.
-5. 37 mutated invalid files (magic, chunk offsets, codecs, loop metadata,
+5. 38 mutated invalid files (magic, chunk offsets, codecs, loop metadata,
    block layout, truncation...): `brstm_info` and `brstm_decode` must exit
    with the exact expected code and error keyword. A crash surfaces as an
    unexpected exit code.

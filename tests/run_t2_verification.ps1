@@ -10,7 +10,7 @@
 #   4. Regenerate the invalid mutants from tKD_N.brstm.
 #   5. player_tests full battery:
 #        metadata (44100/48000/51269, 4ch, 8ch, no-loop) speed (FLSM mapping)
-#        invalid (36 mutants rejected)      loop (byte-identical vs vgmstream)
+#        invalid (38 mutants rejected)      loop (byte-identical vs vgmstream)
 #        noloop (plays to the end)          loopoff (loop flag off -> end)
 #        memory (stable over 16M looped frames)  th (transport, headless)
 #        probe (handle balance)             ta (real device transport, 4ch fold)
@@ -148,7 +148,7 @@ Check 'collection files unchanged after all playback' ($modified.Count -eq 0) ($
 Write-Host '=== 8. T1 harness (after) ===' -ForegroundColor Cyan
 $t1b = Join-Path $work 't1_after.txt'
 # No -SkipBuild: rebuilding here proves the core still compiles unchanged
-# after all T2 work, and keeps both runs symmetric (176 checks).
+# after all T2 work, and keeps both runs symmetric (180 checks).
 $t1bCode = Invoke-Logged 'powershell' @('-ExecutionPolicy', 'Bypass', '-File', $t1Script) $t1b
 Check 'T1 verification passes after T2' ($t1bCode -eq 0) ('exit=' + $t1bCode + ' log=' + $t1b)
 
