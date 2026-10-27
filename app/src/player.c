@@ -817,9 +817,9 @@ void player_set_loop(Player *p, int enabled)
 /* Select the source stereo pair to play: -1 = mix every channel (the
  * default and the only legal value for <4-channel files), otherwise pair p
  * plays source channels 2p/2p+1 as plain stereo. Out-of-range selections
- * are rejected (-1 returned) instead of clamped, so a stale UI action can
- * never silently pick a different pair than the one shown. Like speed, a
- * live change reopens the device so it takes effect immediately. */
+ * are rejected instead of clamped. Switching between two stereo pairs keeps
+ * the device and queued audio alive; the next rendered buffer uses the new
+ * pair. A change that alters the device format still uses the reopen path. */
 int player_set_channel_pair(Player *p, int pair)
 {
     lock(p);
@@ -836,10 +836,13 @@ int player_set_channel_pair(Player *p, int pair)
         }
     }
     if (pair != p->channel_pair) {
+        int old_pair = p->channel_pair;
+        int stereo_to_stereo = old_pair >= 0 && pair >= 0;
         p->channel_pair = pair;
-        /* Reopen while audible so the new output takes effect now: the
-         * device comes back as stereo for a pair, as before for the mix. */
-        if (!p->headless
+        /* A pair change only alters PCM selection, not the device format.
+         * Keep queued audio for stereo-to-stereo switches so playback does
+         * not pause. Reopen only when the output channel count changes. */
+        if (!stereo_to_stereo && !p->headless
             && (p->state == PLAYER_PLAYING || p->state == PLAYER_PAUSED))
             reopen_device_locked(p);
     }

@@ -36,6 +36,11 @@ The engine thread is the sole caller of `audio_out.c`. A command wakes it
 through the command event, and the stop event wakes it during shutdown. The
 critical section protects the player's mutable state shared with the UI.
 
+Changing between two selected stereo pairs only changes which decoded channels
+are copied into the next PCM buffer. The waveOut handle and queued buffers stay
+alive, so a live version switch does not pause playback. Reopening remains the
+fallback when a change alters the device format.
+
 ## Track opening and closing
 
 1. The UI stops and closes the current track.

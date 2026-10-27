@@ -33,30 +33,30 @@
  * lock is needed here - the only cross-thread object is g_player, which has
  * its own critical section. */
 static HWND g_hwnd;         /* main window; also passed to dialogs */
-static Controls g_ctl;      /* every child control handle, filled once */
+static Controls g_controls;      /* every child control handle, filled once */
 static HFONT g_font;        /* shared Segoe UI font for all controls */
 static HBRUSH g_brushFace;  /* group-box background brush */
 static Player *g_player;    /* engine; created in wWinMain, destroyed in
                              * WM_DESTROY (so every exit path is covered by
                              * the window lifetime) */
 
-static TrackRow *g_rows;    /* library array, grows by doubling */
-static int g_rowCount, g_rowCap;
-static int g_selected = -1; /* index into g_rows, -1 = nothing selected */
+static TrackRow *g_library_rows;    /* library array, grows by doubling */
+static int g_library_count, g_library_capacity;
+static int g_selected_index = -1; /* index into g_library_rows, -1 = nothing selected */
 
 /* Last snapshot polled from the player (100 ms timer). The UI never reads
- * the player directly outside update_ui/select_track, so g_snap is the one
+ * the player directly outside update_ui/select_track, so g_player_snapshot is the one
  * place "what the UI believes" lives; command handlers that must not act on
  * stale data re-query the player instead. */
-static PlayerSnapshot g_snap;
+static PlayerSnapshot g_player_snapshot;
 static uint32_t g_last_reported_error; /* audio_error already shown in status */
 static int g_decode_reported;          /* decode failure already shown once */
 
 /* Selftest bookkeeping (--selftest). */
-static int g_stMode;             /* running as a scripted self-test */
-static FILE *g_stReport;         /* optional report file (see load_args) */
-static wchar_t g_stInvalid[1024];/* path of a file that must be rejected */
-static int g_hasInvalid;
+static int g_selftest_mode;             /* running as a scripted self-test */
+static FILE *g_selftest_report;         /* optional report file (see load_args) */
+static wchar_t g_selftest_invalid_path[1024];/* path of a file that must be rejected */
+static int g_has_invalid_path;
 
 /* Heap copy of a wide string (the library owns every path/name it keeps;
  * NULL on OOM, which callers turn into an error message). */
@@ -124,8 +124,8 @@ static void format_speed(wchar_t *out, size_t n, uint32_t ppm)
  * selftest and the user see the same wording. */
 static void set_status(const wchar_t *text)
 {
-    if (g_ctl.status)
-        SendMessageW(g_ctl.status, SB_SETTEXTW, 0, (LPARAM)text);
+    if (g_controls.status)
+        SendMessageW(g_controls.status, SB_SETTEXTW, 0, (LPARAM)text);
 }
 
 /* ---------------------------------------------------------------- rows -- */
@@ -140,31 +140,31 @@ static void list_insert_row(int idx, const TrackRow *row)
     it.iItem = idx;
     it.pszText = (wchar_t *)row->name;
     it.mask = LVIF_TEXT;
-    ListView_InsertItem(g_ctl.list, &it);
+    ListView_InsertItem(g_controls.list, &it);
 
     swprintf(buf, 64, L"%u", row->rate);
-    ListView_SetItemText(g_ctl.list, idx, 1, buf);
+    ListView_SetItemText(g_controls.list, idx, 1, buf);
     swprintf(buf, 64, L"%u", row->channels);
-    ListView_SetItemText(g_ctl.list, idx, 2, buf);
+    ListView_SetItemText(g_controls.list, idx, 2, buf);
     format_time(buf, 64, (double)row->total / row->rate);
-    ListView_SetItemText(g_ctl.list, idx, 3, buf);
-    ListView_SetItemText(g_ctl.list, idx, 4, row->loop ? L"Sí" : L"No");
+    ListView_SetItemText(g_controls.list, idx, 3, buf);
+    ListView_SetItemText(g_controls.list, idx, 4, row->loop ? L"Sí" : L"No");
 }
 
 /* Info panel with nothing to show: placeholders + loop control disabled, so
  * values from a previous track can never be mistaken for the new state. */
 static void clear_info_panel(void)
 {
-    SetWindowTextW(g_ctl.valName, L"—");
-    SetWindowTextW(g_ctl.valPath, L"");
-    SetWindowTextW(g_ctl.valRate, L"—");
-    SetWindowTextW(g_ctl.valCh, L"—");
-    SetWindowTextW(g_ctl.valSamples, L"—");
-    SetWindowTextW(g_ctl.valDur, L"—");
-    SetWindowTextW(g_ctl.valLoop, L"—");
-    SetWindowTextW(g_ctl.valLoopSt, L"No disponible");
-    SetWindowTextW(g_ctl.valLoopEnd, L"No disponible");
-    EnableWindow(g_ctl.checkLoop, FALSE);
+    SetWindowTextW(g_controls.valName, L"—");
+    SetWindowTextW(g_controls.valPath, L"");
+    SetWindowTextW(g_controls.valRate, L"—");
+    SetWindowTextW(g_controls.valCh, L"—");
+    SetWindowTextW(g_controls.valSamples, L"—");
+    SetWindowTextW(g_controls.valDur, L"—");
+    SetWindowTextW(g_controls.valLoop, L"—");
+    SetWindowTextW(g_controls.valLoopSt, L"No disponible");
+    SetWindowTextW(g_controls.valLoopEnd, L"No disponible");
+    EnableWindow(g_controls.checkLoop, FALSE);
 }
 
 /* Fill the info panel from a fresh snapshot. Also syncs the loop checkbox
@@ -176,28 +176,28 @@ static void fill_info_panel(const PlayerSnapshot *s)
     wchar_t t[40];
 
     swprintf(buf, 128, L"%u Hz", s->sample_rate);
-    SetWindowTextW(g_ctl.valRate, buf);
+    SetWindowTextW(g_controls.valRate, buf);
     swprintf(buf, 128, L"%u", s->channels);
-    SetWindowTextW(g_ctl.valCh, buf);
+    SetWindowTextW(g_controls.valCh, buf);
     swprintf(buf, 128, L"%llu", (unsigned long long)s->total_samples);
-    SetWindowTextW(g_ctl.valSamples, buf);
+    SetWindowTextW(g_controls.valSamples, buf);
     format_time(t, 40, (double)s->total_samples / s->sample_rate);
-    SetWindowTextW(g_ctl.valDur, t);
+    SetWindowTextW(g_controls.valDur, t);
     if (s->file_loop) {
         format_time(t, 40, (double)s->loop_start / s->sample_rate);
         swprintf(buf, 128, L"%u (%s)", s->loop_start, t);
-        SetWindowTextW(g_ctl.valLoopSt, buf);
+        SetWindowTextW(g_controls.valLoopSt, buf);
         swprintf(buf, 128, L"%llu (fin del archivo)",
                  (unsigned long long)s->total_samples);
-        SetWindowTextW(g_ctl.valLoopEnd, buf);
-        SetWindowTextW(g_ctl.valLoop, L"Sí");
+        SetWindowTextW(g_controls.valLoopEnd, buf);
+        SetWindowTextW(g_controls.valLoop, L"Sí");
     } else {
-        SetWindowTextW(g_ctl.valLoop, L"No");
-        SetWindowTextW(g_ctl.valLoopSt, L"No disponible");
-        SetWindowTextW(g_ctl.valLoopEnd, L"No disponible");
+        SetWindowTextW(g_controls.valLoop, L"No");
+        SetWindowTextW(g_controls.valLoopSt, L"No disponible");
+        SetWindowTextW(g_controls.valLoopEnd, L"No disponible");
     }
-    EnableWindow(g_ctl.checkLoop, s->file_loop != 0);
-    SendMessageW(g_ctl.checkLoop, BM_SETCHECK,
+    EnableWindow(g_controls.checkLoop, s->file_loop != 0);
+    SendMessageW(g_controls.checkLoop, BM_SETCHECK,
                  s->loop_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
 }
 
@@ -214,15 +214,15 @@ static void select_track(int idx)
     wchar_t msg[1400];
     PlayerSnapshot s;
 
-    if (idx < 0 || idx >= g_rowCount || idx == g_selected)
+    if (idx < 0 || idx >= g_library_count || idx == g_selected_index)
         return;
 
     /* Close the current track before selecting the new one. This keeps the
      * UI and player state aligned when opening the replacement fails. */
     player_stop(g_player);
     player_close(g_player);
-    g_selected = idx;
-    row = &g_rows[idx];
+    g_selected_index = idx;
+    row = &g_library_rows[idx];
 
     if (!narrow_path(row->path, narrow, sizeof narrow)) {
         clear_info_panel();
@@ -240,11 +240,17 @@ static void select_track(int idx)
         return;
     }
 
-    SetWindowTextW(g_ctl.valName, row->name);
-    SetWindowTextW(g_ctl.valPath, row->path);
+    SetWindowTextW(g_controls.valName, row->name);
+    SetWindowTextW(g_controls.valPath, row->path);
     s = player_get_state(g_player);
+    /* The UI exposes individual versions only. The engine still supports
+     * pair -1 for internal tests and callers that explicitly need a mix. */
+    if (s.pair_count > 0 && s.pair_sel < 0) {
+        if (player_set_channel_pair(g_player, 0) == 0)
+            s = player_get_state(g_player);
+    }
     fill_info_panel(&s);
-    g_snap = s;
+    g_player_snapshot = s;
     g_last_reported_error = 0;
     g_decode_reported = 0;
     swprintf(msg, 1400, L"Archivo abierto: %s", row->name);
@@ -277,19 +283,19 @@ static int add_track(const wchar_t *path, wchar_t *errbuf, size_t errlen)
         return -1;
     }
 
-    if (g_rowCount == g_rowCap) {
-        int cap = g_rowCap ? g_rowCap * 2 : 8;
-        TrackRow *rows = (TrackRow *)realloc(g_rows,
+    if (g_library_count == g_library_capacity) {
+        int cap = g_library_capacity ? g_library_capacity * 2 : 8;
+        TrackRow *rows = (TrackRow *)realloc(g_library_rows,
                                              (size_t)cap * sizeof *rows);
         if (!rows) {
             brstm_close(&tmp);
             swprintf(errbuf, errlen, L"«%s»: sin memoria", file_name_of(path));
             return -1;
         }
-        g_rows = rows;
-        g_rowCap = cap;
+        g_library_rows = rows;
+        g_library_capacity = cap;
     }
-    row = &g_rows[g_rowCount];
+    row = &g_library_rows[g_library_count];
     memset(row, 0, sizeof *row);
     row->path = dup_wide(path);
     row->name = dup_wide(file_name_of(path));
@@ -307,57 +313,57 @@ static int add_track(const wchar_t *path, wchar_t *errbuf, size_t errlen)
     row->loop_start = tmp.info.loop_start;
     brstm_close(&tmp);
 
-    list_insert_row(g_rowCount, row);
-    g_rowCount++;
+    list_insert_row(g_library_count, row);
+    g_library_count++;
     return 0;
 }
 
 /* Remove row idx: shift the array, delete the list item and repair the
  * selection. If the removed row was playing, playback stops; the next row
- * (or none) becomes the selection, keeping g_selected always valid. */
+ * (or none) becomes the selection, keeping g_selected_index always valid. */
 static void remove_track(int idx)
 {
     TrackRow *row;
-    if (idx < 0 || idx >= g_rowCount)
+    if (idx < 0 || idx >= g_library_count)
         return;
-    row = &g_rows[idx];
+    row = &g_library_rows[idx];
     free(row->path);
     free(row->name);
-    memmove(&g_rows[idx], &g_rows[idx + 1],
-            (size_t)(g_rowCount - idx - 1) * sizeof *g_rows);
-    g_rowCount--;
-    ListView_DeleteItem(g_ctl.list, idx);
+    memmove(&g_library_rows[idx], &g_library_rows[idx + 1],
+            (size_t)(g_library_count - idx - 1) * sizeof *g_library_rows);
+    g_library_count--;
+    ListView_DeleteItem(g_controls.list, idx);
 
-    if (g_selected == idx) {
+    if (g_selected_index == idx) {
         player_stop(g_player);
         player_close(g_player);
-        g_selected = -1;
+        g_selected_index = -1;
         clear_info_panel();
-        if (g_rowCount > 0)
-            ListView_SetItemState(g_ctl.list,
-                                  (idx < g_rowCount) ? idx : g_rowCount - 1,
+        if (g_library_count > 0)
+            ListView_SetItemState(g_controls.list,
+                                  (idx < g_library_count) ? idx : g_library_count - 1,
                                   LVIS_SELECTED | LVIS_FOCUSED,
                                   LVIS_SELECTED | LVIS_FOCUSED);
-    } else if (g_selected > idx) {
-        g_selected--;
+    } else if (g_selected_index > idx) {
+        g_selected_index--;
     }
 }
 
 /* "Limpiar": stop playback, free every row's strings and empty the list.
- * The g_rows buffer itself is kept (capacity reuse across clears; it is
+ * The g_library_rows buffer itself is kept (capacity reuse across clears; it is
  * process-lifetime state like the rest of the globals and is reclaimed by
  * the OS at exit). */
 static void remove_all(void)
 {
     player_stop(g_player);
     player_close(g_player);
-    for (int i = 0; i < g_rowCount; i++) {
-        free(g_rows[i].path);
-        free(g_rows[i].name);
+    for (int i = 0; i < g_library_count; i++) {
+        free(g_library_rows[i].path);
+        free(g_library_rows[i].name);
     }
-    g_rowCount = 0;
-    g_selected = -1;
-    ListView_DeleteAllItems(g_ctl.list);
+    g_library_count = 0;
+    g_selected_index = -1;
+    ListView_DeleteAllItems(g_controls.list);
     clear_info_panel();
     set_status(L"Lista vacía.");
 }
@@ -425,11 +431,11 @@ static void browse_files(void)
         MessageBoxW(g_hwnd, box, L"Archivo no válido o ilegible",
                     MB_OK | MB_ICONWARNING);
     }
-    if (added > 0 && g_selected < 0 && g_rowCount > 0)
-        ListView_SetItemState(g_ctl.list, 0, LVIS_SELECTED | LVIS_FOCUSED,
+    if (added > 0 && g_selected_index < 0 && g_library_count > 0)
+        ListView_SetItemState(g_controls.list, 0, LVIS_SELECTED | LVIS_FOCUSED,
                               LVIS_SELECTED | LVIS_FOCUSED);
     if (added > 0) {
-        swprintf(sum, 128, L"%d archivo(s) en la lista.", g_rowCount);
+        swprintf(sum, 128, L"%d archivo(s) en la lista.", g_library_count);
         set_status(sum);
     }
 }
@@ -440,10 +446,10 @@ static void browse_files(void)
  * marker line shows the loop start, so both loop points are visible while
  * the song plays. Paint state is UI-thread-only (set in update_ui). */
 
-static uint64_t g_prog_position;
-static uint64_t g_prog_total;
-static uint32_t g_prog_loop_start;
-static int      g_prog_has_loop;
+static uint64_t g_progress_position;
+static uint64_t g_progress_total;
+static uint32_t g_progress_loop_start;
+static int      g_progress_has_loop;
 static HBRUSH   g_brushProgFill;   /* played portion */
 static HBRUSH   g_brushProgLoop;   /* loop region */
 static HBRUSH   g_brushProgMarker; /* loop start line */
@@ -451,8 +457,8 @@ static HBRUSH   g_brushProgMarker; /* loop start line */
 static void update_ui(void);
 
 /* Seek: click (or drag end) on the bar jumps to that source position. */
-static int g_prog_drag;
-static int g_prog_drag_x;
+static int g_progress_dragging;
+static int g_progress_drag_x;
 
 /* Map a click/drag x position to a source sample and seek there. The 1px
  * frame on each side of the custom bar is excluded, and the ratio is done
@@ -464,7 +470,7 @@ static void prog_seek_from_x(HWND hwnd, int x)
     RECT rc;
     int span;
 
-    if (!g_player || g_prog_total == 0)
+    if (!g_player || g_progress_total == 0)
         return;
     GetClientRect(hwnd, &rc);
     span = (rc.right - rc.left) - 2; /* minus the 1px frame on each side */
@@ -473,7 +479,7 @@ static void prog_seek_from_x(HWND hwnd, int x)
     x -= 1;
     if (x < 0) x = 0;
     if (x > span) x = span;
-    if (player_seek(g_player, (uint64_t)g_prog_total * (uint64_t)x
+    if (player_seek(g_player, (uint64_t)g_progress_total * (uint64_t)x
                     / (uint64_t)span) == 0)
         update_ui();
 }
@@ -500,14 +506,14 @@ static LRESULT CALLBACK progress_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         h = rc.bottom - rc.top;
         FillRect(dc, &rc, GetSysColorBrush(COLOR_WINDOW));
         FrameRect(dc, &rc, GetSysColorBrush(COLOR_3DSHADOW));
-        if (g_prog_total > 0 && w > 2 && h > 2) {
+        if (g_progress_total > 0 && w > 2 && h > 2) {
             int span = w - 2;
             int loop_x = -1;
             int fill_x;
 
-            if (g_prog_has_loop) {
-                loop_x = 1 + (int)((uint64_t)span * g_prog_loop_start /
-                                   g_prog_total);
+            if (g_progress_has_loop) {
+                loop_x = 1 + (int)((uint64_t)span * g_progress_loop_start /
+                                   g_progress_total);
                 if (loop_x > w - 2)
                     loop_x = w - 2;
                 if (loop_x > 1) {
@@ -515,8 +521,8 @@ static LRESULT CALLBACK progress_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                     FillRect(dc, &lr, g_brushProgLoop);
                 }
             }
-            fill_x = 1 + (int)((uint64_t)span * g_prog_position /
-                               g_prog_total);
+            fill_x = 1 + (int)((uint64_t)span * g_progress_position /
+                               g_progress_total);
             if (fill_x > w - 1)
                 fill_x = w - 1;
             if (fill_x > 1) {
@@ -528,8 +534,8 @@ static LRESULT CALLBACK progress_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 FillRect(dc, &mr, g_brushProgMarker);
             }
         }
-        if (g_prog_drag && w > 2) {
-            int dx = g_prog_drag_x < 1 ? 1 : g_prog_drag_x;
+        if (g_progress_dragging && w > 2) {
+            int dx = g_progress_drag_x < 1 ? 1 : g_progress_drag_x;
             if (dx > w - 2) dx = w - 2;
             RECT dr = { dx - 1, 0, dx + 1, h };
             FillRect(dc, &dr, GetSysColorBrush(COLOR_3DDKSHADOW));
@@ -539,25 +545,25 @@ static LRESULT CALLBACK progress_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     }
 
     case WM_LBUTTONDOWN:
-        if (g_prog_total > 0) {
-            g_prog_drag = 1;
-            g_prog_drag_x = (int)(short)LOWORD(lp);
+        if (g_progress_total > 0) {
+            g_progress_dragging = 1;
+            g_progress_drag_x = (int)(short)LOWORD(lp);
             SetCapture(hwnd);
-            prog_seek_from_x(hwnd, g_prog_drag_x);
+            prog_seek_from_x(hwnd, g_progress_drag_x);
             InvalidateRect(hwnd, NULL, FALSE);
         }
         return 0;
 
     case WM_MOUSEMOVE:
-        if (g_prog_drag) {
-            g_prog_drag_x = (int)(short)LOWORD(lp);
+        if (g_progress_dragging) {
+            g_progress_drag_x = (int)(short)LOWORD(lp);
             InvalidateRect(hwnd, NULL, FALSE);
         }
         return 0;
 
     case WM_LBUTTONUP:
-        if (g_prog_drag) {
-            g_prog_drag = 0;
+        if (g_progress_dragging) {
+            g_progress_dragging = 0;
             ReleaseCapture();
             prog_seek_from_x(hwnd, (int)(short)LOWORD(lp));
             InvalidateRect(hwnd, NULL, FALSE);
@@ -605,7 +611,7 @@ static void layout(void)
     if (cw < 100 || ch < 100)
         return;
 
-    SendMessageW(g_ctl.status, WM_SIZE, 0, 0);
+    SendMessageW(g_controls.status, WM_SIZE, 0, 0);
 
     leftW = cw * 46 / 100;
     if (leftW < 330) leftW = 330;
@@ -616,61 +622,61 @@ static void layout(void)
     col2 = rightX + rightW / 2 + 2;
 
     /* Library (left column). */
-    move_ctl(g_ctl.groupLib, m, m, leftW, ch - statusH - 2 * m);
-    move_ctl(g_ctl.btnOpen, m + 12, m + 22, 96, 26);
-    move_ctl(g_ctl.btnRemove, m + 116, m + 22, 84, 26);
-    move_ctl(g_ctl.btnClear, m + 208, m + 22, 84, 26);
-    move_ctl(g_ctl.list, m + 12, m + 56, leftW - 24,
+    move_ctl(g_controls.groupLib, m, m, leftW, ch - statusH - 2 * m);
+    move_ctl(g_controls.btnOpen, m + 12, m + 22, 96, 26);
+    move_ctl(g_controls.btnRemove, m + 116, m + 22, 84, 26);
+    move_ctl(g_controls.btnClear, m + 208, m + 22, 84, 26);
+    move_ctl(g_controls.list, m + 12, m + 56, leftW - 24,
              ch - statusH - 2 * m - 56 - 12);
 
     /* Information panel. */
-    move_ctl(g_ctl.groupInfo, rightX, m, rightW, infoH);
+    move_ctl(g_controls.groupInfo, rightX, m, rightW, infoH);
     y = m + 22;
-    move_ctl(g_ctl.capName, x0, y, 84, 18);
-    move_ctl(g_ctl.valName, x0 + 88, y, rightW / 2 - 104, 18);
-    move_ctl(g_ctl.capCh, col2, y, 74, 18);
-    move_ctl(g_ctl.valCh, col2 + 78, y, rightW - (col2 - rightX) - 90, 18);
+    move_ctl(g_controls.capName, x0, y, 84, 18);
+    move_ctl(g_controls.valName, x0 + 88, y, rightW / 2 - 104, 18);
+    move_ctl(g_controls.capCh, col2, y, 74, 18);
+    move_ctl(g_controls.valCh, col2 + 78, y, rightW - (col2 - rightX) - 90, 18);
     y += 24;
-    move_ctl(g_ctl.capRate, x0, y, 84, 18);
-    move_ctl(g_ctl.valRate, x0 + 88, y, rightW / 2 - 104, 18);
-    move_ctl(g_ctl.capDur, col2, y, 74, 18);
-    move_ctl(g_ctl.valDur, col2 + 78, y, rightW - (col2 - rightX) - 90, 18);
+    move_ctl(g_controls.capRate, x0, y, 84, 18);
+    move_ctl(g_controls.valRate, x0 + 88, y, rightW / 2 - 104, 18);
+    move_ctl(g_controls.capDur, col2, y, 74, 18);
+    move_ctl(g_controls.valDur, col2 + 78, y, rightW - (col2 - rightX) - 90, 18);
     y += 24;
-    move_ctl(g_ctl.capSamples, x0, y, 84, 18);
-    move_ctl(g_ctl.valSamples, x0 + 88, y, rightW / 2 - 104, 18);
-    move_ctl(g_ctl.capLoop, col2, y, 74, 18);
-    move_ctl(g_ctl.valLoop, col2 + 78, y, rightW - (col2 - rightX) - 90, 18);
+    move_ctl(g_controls.capSamples, x0, y, 84, 18);
+    move_ctl(g_controls.valSamples, x0 + 88, y, rightW / 2 - 104, 18);
+    move_ctl(g_controls.capLoop, col2, y, 74, 18);
+    move_ctl(g_controls.valLoop, col2 + 78, y, rightW - (col2 - rightX) - 90, 18);
     y += 24;
-    move_ctl(g_ctl.capLoopSt, x0, y, 84, 18);
-    move_ctl(g_ctl.valLoopSt, x0 + 88, y, col2 - (x0 + 88) - 12, 18);
-    move_ctl(g_ctl.capLoopEnd, col2, y, 74, 18);
-    move_ctl(g_ctl.valLoopEnd, col2 + 78, y, rightW - (col2 - rightX) - 90,
+    move_ctl(g_controls.capLoopSt, x0, y, 84, 18);
+    move_ctl(g_controls.valLoopSt, x0 + 88, y, col2 - (x0 + 88) - 12, 18);
+    move_ctl(g_controls.capLoopEnd, col2, y, 74, 18);
+    move_ctl(g_controls.valLoopEnd, col2 + 78, y, rightW - (col2 - rightX) - 90,
              18);
     y += 24;
-    move_ctl(g_ctl.capVer, x0, y, 84, 18);
-    move_ctl(g_ctl.btnPair, x0 + 88, y - 2, rightW - 104, 22);
+    move_ctl(g_controls.capVer, x0, y, 84, 18);
+    move_ctl(g_controls.btnPair, x0 + 88, y - 2, rightW - 104, 22);
     y += 26;
-    move_ctl(g_ctl.capPath, x0, y, 84, 18);
-    move_ctl(g_ctl.valPath, x0 + 88, y, rightW - 104, 20);
+    move_ctl(g_controls.capPath, x0, y, 84, 18);
+    move_ctl(g_controls.valPath, x0 + 88, y, rightW - 104, 20);
 
     /* Transport: one play/pause button (96+ px so "Reproducir" fits),
      * previous-track and next-track beside it. */
     y = m + infoH + g;
-    move_ctl(g_ctl.groupPlay, rightX, y, rightW, playH);
-    move_ctl(g_ctl.btnPlay, rightX + 12, y + 22, 104, 28);
-    move_ctl(g_ctl.btnPrevious, rightX + 124, y + 22, 84, 28);
-    move_ctl(g_ctl.btnNext, rightX + 216, y + 22, 96, 28);
-    move_ctl(g_ctl.progress, rightX + 12, y + 58, rightW - 24 - 176, 16);
-    move_ctl(g_ctl.valState, rightX + rightW - 12 - 164, y + 56, 164, 20);
-    move_ctl(g_ctl.valTime, rightX + 12, y + 80, 170, 18);
-    move_ctl(g_ctl.checkLoop, rightX + rightW - 12 - 170, y + 78, 170, 20);
+    move_ctl(g_controls.groupPlay, rightX, y, rightW, playH);
+    move_ctl(g_controls.btnPlay, rightX + 12, y + 22, 104, 28);
+    move_ctl(g_controls.btnPrevious, rightX + 124, y + 22, 84, 28);
+    move_ctl(g_controls.btnNext, rightX + 216, y + 22, 96, 28);
+    move_ctl(g_controls.progress, rightX + 12, y + 58, rightW - 24 - 176, 16);
+    move_ctl(g_controls.valState, rightX + rightW - 12 - 164, y + 56, 164, 20);
+    move_ctl(g_controls.valTime, rightX + 12, y + 80, 170, 18);
+    move_ctl(g_controls.checkLoop, rightX + rightW - 12 - 170, y + 78, 170, 20);
 
     /* Speed: a single toggle button showing the mode in force. */
     y = m + infoH + g + playH + g;
-    move_ctl(g_ctl.groupSpeed, rightX, y, rightW, speedH);
-    move_ctl(g_ctl.valSpeed, rightX + 12, y + 28, 84, 20);
-    move_ctl(g_ctl.valDevRate, rightX + rightW - 12 - 170, y + 28, 170, 20);
-    move_ctl(g_ctl.btnSpeed, rightX + 12, y + 60, 200, 26);
+    move_ctl(g_controls.groupSpeed, rightX, y, rightW, speedH);
+    move_ctl(g_controls.valSpeed, rightX + 12, y + 28, 84, 20);
+    move_ctl(g_controls.valDevRate, rightX + rightW - 12 - 170, y + 28, 170, 20);
+    move_ctl(g_controls.btnSpeed, rightX + 12, y + 60, 200, 26);
 }
 
 /* ------------------------------------------------------------ creation -- */
@@ -706,18 +712,18 @@ static void create_controls(HWND parent)
               | ICC_PROGRESS_CLASS | ICC_STANDARD_CLASSES;
     InitCommonControlsEx(&icc);
 
-    g_ctl.groupLib = make_ctl(parent, 0, L"BUTTON", L"Biblioteca",
+    g_controls.groupLib = make_ctl(parent, 0, L"BUTTON", L"Biblioteca",
                               BS_GROUPBOX, 0, 0, 0, 0, 0);
-    g_ctl.btnOpen = make_ctl(parent, 0, L"BUTTON", L"Abrir…",
+    g_controls.btnOpen = make_ctl(parent, 0, L"BUTTON", L"Abrir…",
                              0, IDC_BTN_OPEN, 0, 0, 0, 0);
-    g_ctl.btnRemove = make_ctl(parent, 0, L"BUTTON", L"Quitar",
+    g_controls.btnRemove = make_ctl(parent, 0, L"BUTTON", L"Quitar",
                                0, IDC_BTN_REMOVE, 0, 0, 0, 0);
-    g_ctl.btnClear = make_ctl(parent, 0, L"BUTTON", L"Limpiar",
+    g_controls.btnClear = make_ctl(parent, 0, L"BUTTON", L"Limpiar",
                               0, IDC_BTN_CLEAR, 0, 0, 0, 0);
-    g_ctl.list = make_ctl(parent, WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
+    g_controls.list = make_ctl(parent, WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
                           LVS_REPORT | LVS_SHOWSELALWAYS, IDC_LIST,
                           0, 0, 0, 0);
-    ListView_SetExtendedListViewStyle(g_ctl.list,
+    ListView_SetExtendedListViewStyle(g_controls.list,
         LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
 
     memset(&col, 0, sizeof col);
@@ -731,101 +737,101 @@ static void create_controls(HWND parent)
             col.pszText = (wchar_t *)names[i];
             col.cx = widths[i];
             col.iSubItem = i;
-            ListView_InsertColumn(g_ctl.list, i, &col);
+            ListView_InsertColumn(g_controls.list, i, &col);
         }
     }
 
-    g_ctl.groupInfo = make_ctl(parent, 0, L"BUTTON",
+    g_controls.groupInfo = make_ctl(parent, 0, L"BUTTON",
                                L"Información del archivo", BS_GROUPBOX,
                                0, 0, 0, 0, 0);
-    g_ctl.capName = make_ctl(parent, 0, L"STATIC", L"Nombre:", 0,
+    g_controls.capName = make_ctl(parent, 0, L"STATIC", L"Nombre:", 0,
                              IDC_CAP_NAME, 0, 0, 0, 0);
-    g_ctl.capCh = make_ctl(parent, 0, L"STATIC", L"Canales:", 0,
+    g_controls.capCh = make_ctl(parent, 0, L"STATIC", L"Canales:", 0,
                            IDC_CAP_CH, 0, 0, 0, 0);
-    g_ctl.capRate = make_ctl(parent, 0, L"STATIC", L"Frecuencia:", 0,
+    g_controls.capRate = make_ctl(parent, 0, L"STATIC", L"Frecuencia:", 0,
                              IDC_CAP_RATE, 0, 0, 0, 0);
-    g_ctl.capDur = make_ctl(parent, 0, L"STATIC", L"Duración:", 0,
+    g_controls.capDur = make_ctl(parent, 0, L"STATIC", L"Duración:", 0,
                             IDC_CAP_DUR, 0, 0, 0, 0);
-    g_ctl.capSamples = make_ctl(parent, 0, L"STATIC", L"Muestras:", 0,
+    g_controls.capSamples = make_ctl(parent, 0, L"STATIC", L"Muestras:", 0,
                                 IDC_CAP_SAMPLES, 0, 0, 0, 0);
-    g_ctl.capLoop = make_ctl(parent, 0, L"STATIC", L"Loop:", 0,
+    g_controls.capLoop = make_ctl(parent, 0, L"STATIC", L"Loop:", 0,
                              IDC_CAP_LOOP, 0, 0, 0, 0);
-    g_ctl.capLoopSt = make_ctl(parent, 0, L"STATIC", L"Inicio de loop:", 0,
+    g_controls.capLoopSt = make_ctl(parent, 0, L"STATIC", L"Inicio de loop:", 0,
                                IDC_CAP_LOOPST, 0, 0, 0, 0);
-    g_ctl.capLoopEnd = make_ctl(parent, 0, L"STATIC", L"Fin de loop:", 0,
+    g_controls.capLoopEnd = make_ctl(parent, 0, L"STATIC", L"Fin de loop:", 0,
                                 IDC_CAP_LOOPEND, 0, 0, 0, 0);
-    g_ctl.capPath = make_ctl(parent, 0, L"STATIC", L"Ruta:", 0,
+    g_controls.capPath = make_ctl(parent, 0, L"STATIC", L"Ruta:", 0,
                              IDC_CAP_PATH, 0, 0, 0, 0);
-    g_ctl.valName = make_ctl(parent, 0, L"STATIC", L"—", 0,
+    g_controls.valName = make_ctl(parent, 0, L"STATIC", L"—", 0,
                              IDC_VAL_NAME, 0, 0, 0, 0);
-    g_ctl.valPath = make_ctl(parent, WS_EX_CLIENTEDGE, L"EDIT", L"",
+    g_controls.valPath = make_ctl(parent, WS_EX_CLIENTEDGE, L"EDIT", L"",
                              ES_READONLY | ES_AUTOHSCROLL, IDC_VAL_PATH,
                              0, 0, 0, 0);
-    g_ctl.valRate = make_ctl(parent, 0, L"STATIC", L"—", 0,
+    g_controls.valRate = make_ctl(parent, 0, L"STATIC", L"—", 0,
                              IDC_VAL_RATE, 0, 0, 0, 0);
-    g_ctl.valCh = make_ctl(parent, 0, L"STATIC", L"—", 0,
+    g_controls.valCh = make_ctl(parent, 0, L"STATIC", L"—", 0,
                            IDC_VAL_CH, 0, 0, 0, 0);
-    g_ctl.valSamples = make_ctl(parent, 0, L"STATIC", L"—", 0,
+    g_controls.valSamples = make_ctl(parent, 0, L"STATIC", L"—", 0,
                                 IDC_VAL_SAMPLES, 0, 0, 0, 0);
-    g_ctl.valDur = make_ctl(parent, 0, L"STATIC", L"—", 0,
+    g_controls.valDur = make_ctl(parent, 0, L"STATIC", L"—", 0,
                             IDC_VAL_DUR, 0, 0, 0, 0);
-    g_ctl.valLoop = make_ctl(parent, 0, L"STATIC", L"—", 0,
+    g_controls.valLoop = make_ctl(parent, 0, L"STATIC", L"—", 0,
                              IDC_VAL_LOOP, 0, 0, 0, 0);
-    g_ctl.valLoopSt = make_ctl(parent, 0, L"STATIC", L"No disponible", 0,
+    g_controls.valLoopSt = make_ctl(parent, 0, L"STATIC", L"No disponible", 0,
                                IDC_VAL_LOOPST, 0, 0, 0, 0);
-    g_ctl.valLoopEnd = make_ctl(parent, 0, L"STATIC", L"No disponible", 0,
+    g_controls.valLoopEnd = make_ctl(parent, 0, L"STATIC", L"No disponible", 0,
                                 IDC_VAL_LOOPEND, 0, 0, 0, 0);
-    g_ctl.capVer = make_ctl(parent, 0, L"STATIC", L"Versión:", 0,
+    g_controls.capVer = make_ctl(parent, 0, L"STATIC", L"Versión:", 0,
                             IDC_CAP_VER, 0, 0, 0, 0);
-    g_ctl.btnPair = make_ctl(parent, 0, L"BUTTON", L"—", 0,
+    g_controls.btnPair = make_ctl(parent, 0, L"BUTTON", L"—", 0,
                              IDC_BTN_PAIR, 0, 0, 0, 0);
 
-    g_ctl.groupPlay = make_ctl(parent, 0, L"BUTTON", L"Reproducción",
+    g_controls.groupPlay = make_ctl(parent, 0, L"BUTTON", L"Reproducción",
                                BS_GROUPBOX, 0, 0, 0, 0, 0);
     /* Transport like an MP3 player: play doubles as pause (its caption says
      * what the next click does), "Anterior" goes back (or restarts a song
      * that is more than 3 s in), "Siguiente" moves on to the next library
      * row. There is deliberately no separate stop button. */
-    g_ctl.btnPlay = make_ctl(parent, 0, L"BUTTON", L"Reproducir",
+    g_controls.btnPlay = make_ctl(parent, 0, L"BUTTON", L"Reproducir",
                              0, IDC_BTN_PLAY, 0, 0, 0, 0);
-    g_ctl.btnPrevious = make_ctl(parent, 0, L"BUTTON", L"Anterior",
+    g_controls.btnPrevious = make_ctl(parent, 0, L"BUTTON", L"Anterior",
                              0, IDC_BTN_PREVIOUS, 0, 0, 0, 0);
-    g_ctl.btnNext = make_ctl(parent, 0, L"BUTTON", L"Siguiente",
+    g_controls.btnNext = make_ctl(parent, 0, L"BUTTON", L"Siguiente",
                              0, IDC_BTN_NEXT, 0, 0, 0, 0);
-    g_ctl.progress = make_ctl(parent, 0, PROGRESS_CLASS_NAME, L"",
+    g_controls.progress = make_ctl(parent, 0, PROGRESS_CLASS_NAME, L"",
                               0, IDC_PROGRESS, 0, 0, 0, 0);
-    g_ctl.valState = make_ctl(parent, 0, L"STATIC", L"Estado: Detenido",
+    g_controls.valState = make_ctl(parent, 0, L"STATIC", L"Estado: Detenido",
                               SS_RIGHT, IDC_VAL_STATE, 0, 0, 0, 0);
-    g_ctl.valTime = make_ctl(parent, 0, L"STATIC", L"0:00.000 / 0:00.000",
+    g_controls.valTime = make_ctl(parent, 0, L"STATIC", L"0:00.000 / 0:00.000",
                              0, IDC_VAL_TIME, 0, 0, 0, 0);
-    g_ctl.checkLoop = make_ctl(parent, 0, L"BUTTON", L"Repetir loop",
+    g_controls.checkLoop = make_ctl(parent, 0, L"BUTTON", L"Repetir loop",
                                BS_AUTOCHECKBOX | BS_LEFT, IDC_CHECK_LOOP,
                                0, 0, 0, 0);
 
-    g_ctl.groupSpeed = make_ctl(parent, 0, L"BUTTON", L"Velocidad",
+    g_controls.groupSpeed = make_ctl(parent, 0, L"BUTTON", L"Velocidad",
                                 BS_GROUPBOX, 0, 0, 0, 0, 0);
-    g_ctl.valSpeed = make_ctl(parent, 0, L"STATIC", L"1,00×", SS_RIGHT,
+    g_controls.valSpeed = make_ctl(parent, 0, L"STATIC", L"1,00×", SS_RIGHT,
                               IDC_VAL_SPEED, 0, 0, 0, 0);
-    g_ctl.valDevRate = make_ctl(parent, 0, L"STATIC", L"Dispositivo: —",
+    g_controls.valDevRate = make_ctl(parent, 0, L"STATIC", L"Dispositivo: —",
                                 SS_RIGHT, IDC_VAL_DEVRATE, 0, 0, 0, 0);
-    g_ctl.btnSpeed = make_ctl(parent, 0, L"BUTTON", L"1,0×", 0,
+    g_controls.btnSpeed = make_ctl(parent, 0, L"BUTTON", L"1,0×", 0,
                               IDC_BTN_SPEED, 0, 0, 0, 0);
 
-    g_ctl.status = CreateWindowExW(0, STATUSCLASSNAMEW, L"Listo.",
+    g_controls.status = CreateWindowExW(0, STATUSCLASSNAMEW, L"Listo.",
                                    WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
                                    0, 0, 0, 0, parent,
                                    (HMENU)(INT_PTR)2, GetModuleHandleW(NULL),
                                    NULL);
-    SendMessageW(g_ctl.status, WM_SETFONT, (WPARAM)g_font, TRUE);
+    SendMessageW(g_controls.status, WM_SETFONT, (WPARAM)g_font, TRUE);
 
     layout();
-    EnableWindow(g_ctl.btnPlay, FALSE);
-    EnableWindow(g_ctl.btnPrevious, FALSE);
-    EnableWindow(g_ctl.btnNext, FALSE);
-    EnableWindow(g_ctl.btnRemove, FALSE);
-    EnableWindow(g_ctl.btnClear, FALSE);
-    EnableWindow(g_ctl.checkLoop, FALSE);
-    EnableWindow(g_ctl.btnPair, FALSE);
+    EnableWindow(g_controls.btnPlay, FALSE);
+    EnableWindow(g_controls.btnPrevious, FALSE);
+    EnableWindow(g_controls.btnNext, FALSE);
+    EnableWindow(g_controls.btnRemove, FALSE);
+    EnableWindow(g_controls.btnClear, FALSE);
+    EnableWindow(g_controls.checkLoop, FALSE);
+    EnableWindow(g_controls.btnPair, FALSE);
 }
 
 /* ----------------------------------------------------------------- UI --- */
@@ -839,7 +845,7 @@ static void apply_speed(uint32_t ppm)
     wchar_t buf[40];
     player_set_speed(g_player, ppm);
     format_speed(buf, 40, ppm);
-    SetWindowTextW(g_ctl.valSpeed, buf);
+    SetWindowTextW(g_controls.valSpeed, buf);
 }
 
 /* One full UI refresh from a fresh snapshot; runs every UI_TICK_MS and
@@ -855,7 +861,7 @@ static void update_ui(void)
     wchar_t buf[160], t1[40], t2[40];
     double devRate;
 
-    g_snap = s;
+    g_player_snapshot = s;
 
     switch (s.state) {
     case PLAYER_PLAYING:
@@ -873,9 +879,9 @@ static void update_ui(void)
     }
     {
         wchar_t cur[64];
-        GetWindowTextW(g_ctl.valState, cur, 64);
+        GetWindowTextW(g_controls.valState, cur, 64);
         if (wcscmp(cur, stateText) != 0)
-            SetWindowTextW(g_ctl.valState, stateText);
+            SetWindowTextW(g_controls.valState, stateText);
     }
 
     /* The single transport button announces what the NEXT click does. */
@@ -890,15 +896,15 @@ static void update_ui(void)
             playText = L"Volver a reproducir";
         else
             playText = L"Reproducir";
-        GetWindowTextW(g_ctl.btnPlay, curPlay, 32);
+        GetWindowTextW(g_controls.btnPlay, curPlay, 32);
         if (wcscmp(curPlay, playText) != 0)
-            SetWindowTextW(g_ctl.btnPlay, playText);
+            SetWindowTextW(g_controls.btnPlay, playText);
     }
-    EnableWindow(g_ctl.btnPlay, g_selected >= 0);
-    EnableWindow(g_ctl.btnPrevious, g_selected >= 0 && s.total_samples > 0);
-    EnableWindow(g_ctl.btnNext, g_selected >= 0 && g_rowCount > 1);
-    EnableWindow(g_ctl.btnRemove, g_rowCount > 0);
-    EnableWindow(g_ctl.btnClear, g_rowCount > 0);
+    EnableWindow(g_controls.btnPlay, g_selected_index >= 0);
+    EnableWindow(g_controls.btnPrevious, g_selected_index >= 0 && s.total_samples > 0);
+    EnableWindow(g_controls.btnNext, g_selected_index >= 0 && g_library_count > 1);
+    EnableWindow(g_controls.btnRemove, g_library_count > 0);
+    EnableWindow(g_controls.btnClear, g_library_count > 0);
 
     /* Speed button: caption is the mode in force (like the version button). */
     {
@@ -911,9 +917,9 @@ static void update_ui(void)
             format_speed(buf, 40, s.speed_ppm);
             swprintf(speedText, 64, L"%s", buf);
         }
-        GetWindowTextW(g_ctl.btnSpeed, cur, 64);
+        GetWindowTextW(g_controls.btnSpeed, cur, 64);
         if (wcscmp(cur, speedText) != 0)
-            SetWindowTextW(g_ctl.btnSpeed, speedText);
+            SetWindowTextW(g_controls.btnSpeed, speedText);
     }
 
     /* Version button: its caption is the current selection. */
@@ -924,21 +930,20 @@ static void update_ui(void)
             want = L"—";
         } else if (s.pair_count == 0) {
             want = L"Estéreo";
-        } else if (s.pair_sel < 0) {
-            want = L"Todas (mezcla)";
         } else {
+            int pair = s.pair_sel < 0 ? 0 : s.pair_sel;
             swprintf(pairText, 64, L"Versión %d · canales %d-%d",
-                     s.pair_sel + 1, s.pair_sel * 2 + 1, s.pair_sel * 2 + 2);
+                     pair + 1, pair * 2 + 1, pair * 2 + 2);
             want = pairText;
         }
-        GetWindowTextW(g_ctl.btnPair, cur, 64);
+        GetWindowTextW(g_controls.btnPair, cur, 64);
         if (wcscmp(cur, want) != 0)
-            SetWindowTextW(g_ctl.btnPair, want);
-        EnableWindow(g_ctl.btnPair, s.pair_count > 0);
+            SetWindowTextW(g_controls.btnPair, want);
+        EnableWindow(g_controls.btnPair, s.pair_count > 0);
     }
 
     if (s.file_loop)
-        SendMessageW(g_ctl.checkLoop, BM_SETCHECK,
+        SendMessageW(g_controls.checkLoop, BM_SETCHECK,
                      s.loop_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
 
     devRate = s.sample_rate ? (double)s.device_rate : 0.0;
@@ -948,30 +953,30 @@ static void update_ui(void)
                      s.device_rate);
         else
             swprintf(buf, 160, L"Dispositivo: %u Hz", s.device_rate);
-        SetWindowTextW(g_ctl.valDevRate, buf);
+        SetWindowTextW(g_controls.valDevRate, buf);
         format_speed(buf, 40, s.speed_ppm);
-        SetWindowTextW(g_ctl.valSpeed, buf);
+        SetWindowTextW(g_controls.valSpeed, buf);
     } else {
-        SetWindowTextW(g_ctl.valDevRate, L"Dispositivo: —");
+        SetWindowTextW(g_controls.valDevRate, L"Dispositivo: —");
     }
 
-    if (g_prog_position != s.position || g_prog_total != s.total_samples ||
-        g_prog_has_loop != s.file_loop ||
-        g_prog_loop_start != s.loop_start) {
-        g_prog_position = s.position;
-        g_prog_total = s.total_samples;
-        g_prog_has_loop = s.file_loop;
-        g_prog_loop_start = s.loop_start;
-        InvalidateRect(g_ctl.progress, NULL, FALSE);
+    if (g_progress_position != s.position || g_progress_total != s.total_samples ||
+        g_progress_has_loop != s.file_loop ||
+        g_progress_loop_start != s.loop_start) {
+        g_progress_position = s.position;
+        g_progress_total = s.total_samples;
+        g_progress_has_loop = s.file_loop;
+        g_progress_loop_start = s.loop_start;
+        InvalidateRect(g_controls.progress, NULL, FALSE);
     }
     if (s.total_samples > 0) {
         format_time(t1, 40, devRate > 0 ? (double)s.position / devRate : 0.0);
         format_time(t2, 40, devRate > 0
                           ? (double)s.total_samples / devRate : 0.0);
         swprintf(buf, 160, L"%s / %s", t1, t2);
-        SetWindowTextW(g_ctl.valTime, buf);
+        SetWindowTextW(g_controls.valTime, buf);
     } else {
-        SetWindowTextW(g_ctl.valTime, L"0:00.000 / 0:00.000");
+        SetWindowTextW(g_controls.valTime, L"0:00.000 / 0:00.000");
     }
 
     if (s.audio_error != 0 && s.audio_error != g_last_reported_error) {
@@ -992,9 +997,9 @@ static void update_ui(void)
  * previous/next transport buttons. */
 static void change_track(int idx, int wasPlaying)
 {
-    ListView_SetItemState(g_ctl.list, idx, LVIS_SELECTED | LVIS_FOCUSED,
+    ListView_SetItemState(g_controls.list, idx, LVIS_SELECTED | LVIS_FOCUSED,
                           LVIS_SELECTED | LVIS_FOCUSED);
-    if (g_selected != idx)
+    if (g_selected_index != idx)
         select_track(idx); /* no LVN_ITEMCHANGED when the row does not change */
     if (wasPlaying && player_get_state(g_player).state != PLAYER_PLAYING)
         player_play(g_player);
@@ -1011,14 +1016,14 @@ static void on_command(int id)
         browse_files();
         break;
     case IDC_BTN_REMOVE:
-        if (g_selected >= 0)
-            remove_track(g_selected);
+        if (g_selected_index >= 0)
+            remove_track(g_selected_index);
         break;
     case IDC_BTN_CLEAR:
         remove_all();
         break;
     case IDC_BTN_PLAY: {
-        /* One button for play and pause; the live state decides (g_snap may
+        /* One button for play and pause; the live state decides (g_player_snapshot may
          * be up to one tick behind). FINISHED restarts from the beginning,
          * because "play" on a finished song means hearing it again. */
         PlayerState st = player_get_state(g_player).state;
@@ -1048,9 +1053,9 @@ static void on_command(int id)
          * over"; at the beginning it means "previous track" (wrapping to
          * the last row). Keeps playing across a track change. */
         PlayerSnapshot s = player_get_state(g_player);
-        int prev = g_selected > 0 ? g_selected - 1
-                                  : (g_rowCount > 0 ? g_rowCount - 1 : -1);
-        if (prev >= 0 && prev != g_selected && s.sample_rate > 0
+        int prev = g_selected_index > 0 ? g_selected_index - 1
+                                  : (g_library_count > 0 ? g_library_count - 1 : -1);
+        if (prev >= 0 && prev != g_selected_index && s.sample_rate > 0
             && s.position <= 3u * (uint64_t)s.sample_rate) {
             int wasPlaying = s.state == PLAYER_PLAYING;
             change_track(prev, wasPlaying);
@@ -1064,9 +1069,9 @@ static void on_command(int id)
     case IDC_BTN_NEXT: {
         int next;
         int wasPlaying;
-        if (g_selected < 0 || g_rowCount <= 0)
+        if (g_selected_index < 0 || g_library_count <= 0)
             break;
-        next = (g_selected + 1) % g_rowCount;
+        next = (g_selected_index + 1) % g_library_count;
         /* Keep playing across the change if the user was listening. */
         wasPlaying = player_get_state(g_player).state == PLAYER_PLAYING;
         change_track(next, wasPlaying);
@@ -1075,7 +1080,7 @@ static void on_command(int id)
     }
     case IDC_CHECK_LOOP:
         player_set_loop(g_player,
-                        SendMessageW(g_ctl.checkLoop, BM_GETCHECK, 0, 0)
+                        SendMessageW(g_controls.checkLoop, BM_GETCHECK, 0, 0)
                             == BST_CHECKED);
         break;
     case IDC_BTN_SPEED:
@@ -1091,21 +1096,16 @@ static void on_command(int id)
         int next;
         if (s.pair_count == 0)
             break;
-        if (s.pair_sel < 0)
+        /* The UI never offers the engine's internal mix-all value (-1). */
+        if (s.pair_sel < 0 || s.pair_sel + 1 >= (int)s.pair_count)
             next = 0;
-        else if (s.pair_sel + 1 < (int)s.pair_count)
-            next = s.pair_sel + 1;
         else
-            next = -1;
+            next = s.pair_sel + 1;
         if (player_set_channel_pair(g_player, next) != 0)
             break;
-        if (next < 0)
-            set_status(L"Mezclando todos los canales.");
-        else {
-            swprintf(msg, 80, L"Versión %d: canales %d-%d.",
-                     next + 1, next * 2 + 1, next * 2 + 2);
-            set_status(msg);
-        }
+        swprintf(msg, 80, L"Versión %d: canales %d-%d.",
+                 next + 1, next * 2 + 1, next * 2 + 2);
+        set_status(msg);
         break;
     }
     default:
@@ -1166,8 +1166,8 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         HDC hdc = (HDC)wp;
         HWND ctl = (HWND)lp;
         SetBkMode(hdc, TRANSPARENT);
-        if (ctl == g_ctl.valState) {
-            PlayerState st = g_snap.state;
+        if (ctl == g_controls.valState) {
+            PlayerState st = g_player_snapshot.state;
             COLORREF c = RGB(96, 96, 96);
             if (st == PLAYER_PLAYING) c = RGB(27, 124, 52);
             else if (st == PLAYER_PAUSED) c = RGB(191, 108, 0);
@@ -1245,16 +1245,16 @@ static void load_args(int argc, wchar_t **argv)
     };
 
     cli_options_parse(argc, argv, &options, &callbacks);
-    g_stMode = options.selftest;
-    g_hasInvalid = options.has_invalid_path;
-    if (g_hasInvalid)
-        wcscpy_s(g_stInvalid, sizeof g_stInvalid / sizeof *g_stInvalid,
+    g_selftest_mode = options.selftest;
+    g_has_invalid_path = options.has_invalid_path;
+    if (g_has_invalid_path)
+        wcscpy_s(g_selftest_invalid_path, sizeof g_selftest_invalid_path / sizeof *g_selftest_invalid_path,
                  options.invalid_path);
 
     /* Narrow fprintf() on a ccs=UTF-8 stream aborts on this CRT, so the
      * report is plain text and is opened only for a selftest run. */
     if (options.selftest && options.has_report_path)
-        g_stReport = _wfopen(options.report_path, L"w");
+        g_selftest_report = _wfopen(options.report_path, L"w");
 }
 
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
@@ -1332,21 +1332,21 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
 
     load_args(argc, argv);
 
-    if (g_rowCount > 0)
-        ListView_SetItemState(g_ctl.list, 0, LVIS_SELECTED | LVIS_FOCUSED,
+    if (g_library_count > 0)
+        ListView_SetItemState(g_controls.list, 0, LVIS_SELECTED | LVIS_FOCUSED,
                               LVIS_SELECTED | LVIS_FOCUSED);
 
-    if (g_stMode) {
+    if (g_selftest_mode) {
         UiSelfTestContext test = {
             g_hwnd,
-            &g_ctl,
+            &g_controls,
             g_player,
-            &g_snap,
-            &g_rowCount,
-            &g_selected,
-            g_stInvalid,
-            g_hasInvalid,
-            g_stReport,
+            &g_player_snapshot,
+            &g_library_count,
+            &g_selected_index,
+            g_selftest_invalid_path,
+            g_has_invalid_path,
+            g_selftest_report,
             cli_add_track,
             NULL,
             0,
@@ -1355,7 +1355,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
             0
         };
         rc = ui_selftest_run(&test);
-        g_stReport = NULL;
+        g_selftest_report = NULL;
         LocalFree(argv);
         return rc;
     }

@@ -321,26 +321,26 @@ static void st_phase_pair(void)
     /* Version (channel pair) selection on the 4-channel second track. */
     {
         PlayerSnapshot s = player_get_state(g_test->player);
-        st_check(s.channels == 4 && s.pair_count == 2,
-                 "4-channel file exposes 2 channel pairs");
+        st_check(s.channels == 4 && s.pair_count == 2 && s.pair_sel == 0,
+                 "4-channel file exposes 2 versions and starts on version 1");
         send_cmd(IDC_BTN_PAIR);
         pump(50);
         s = player_get_state(g_test->player);
-        st_check(s.pair_sel == 0, "version button selects pair 1");
+        st_check(s.pair_sel == 1, "version button selects pair 2");
         send_cmd(IDC_BTN_PAIR);
         pump(50);
         s = player_get_state(g_test->player);
-        st_check(s.pair_sel == 1, "second press selects pair 2");
+        st_check(s.pair_sel == 0, "second press returns to version 1");
         {
             wchar_t cap[64] = L"";
             GetWindowTextW((*g_test->controls).btnPair, cap, 64);
-            st_check(wcsstr(cap, L"Versión 2") != NULL,
+            st_check(wcsstr(cap, L"Versión 1") != NULL,
                      "button caption shows the selected version");
         }
         send_cmd(IDC_BTN_PAIR);
         pump(50);
         s = player_get_state(g_test->player);
-        st_check(s.pair_sel == -1, "third press returns to all channels");
+        st_check(s.pair_sel == 1, "third press selects version 2 again");
         st_log_handles("pair cycle while stopped");
 
         /* Live switch: a version is chosen while audio is playing. */
@@ -352,14 +352,19 @@ static void st_phase_pair(void)
         send_cmd(IDC_BTN_PAIR);
         pump(150); /* pair 2 selected */
         s = player_get_state(g_test->player);
-        st_check(s.state == PLAYER_PLAYING && s.pair_sel == 1,
-                 "version switches live while playing");
+        {
+            uint64_t position_after_switch = s.position;
+            st_check(s.state == PLAYER_PLAYING && s.pair_sel == 1,
+                     "version switches live while playing");
+            st_check(position_after_switch > 0,
+                     "version switch keeps the audible position");
+        }
         send_cmd(IDC_BTN_PAIR);
-        pump(150); /* back to all channels */
+        pump(150); /* version 1 selected again */
         s = player_get_state(g_test->player);
-        st_check(s.state == PLAYER_PLAYING && s.pair_sel == -1
+        st_check(s.state == PLAYER_PLAYING && s.pair_sel == 0
                  && s.audio_error == 0,
-                 "mix-all restored live without audio errors");
+                 "version 1 restored live without audio errors");
         st_log_handles("after live pair switches");
 
         /* Siguiente: from the last row it wraps to the first one and keeps
