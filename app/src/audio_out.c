@@ -171,6 +171,10 @@ MMRESULT audio_write(AudioOut *a, uint32_t slot, const int16_t *pcm,
         const uint32_t sc = a->channels;
         const uint32_t nl = (sc + 1) / 2;
         const uint32_t nr = sc / 2;
+        /* The fold is only enabled for more than two source channels, so both
+         * sides always have at least one channel. */
+        if (nl == 0 || nr == 0)
+            return MMSYSERR_INVALPARAM;
         int16_t *dst = (int16_t *)a->data[slot];
         uint32_t f, c;
         for (f = 0; f < frames; f++) {

@@ -3,8 +3,9 @@ and measure the discontinuity at the loop wrap point."""
 import os
 import struct
 import statistics
+import tempfile
 
-OUT = os.environ["LOCALAPPDATA"] + r"\Temp\opencode\brstm_exp"
+OUT = tempfile.mkdtemp(prefix="brstm_exp_")
 
 LOOP_START = 5634048
 TOTAL = 12786908

@@ -331,6 +331,7 @@ BrstmStatus brstm_open(const char *path, Brstm *out, char *err, size_t errlen)
     }
 
     RstmHeader h;
+    memset(&h, 0, sizeof h);
     BrstmStatus st = parse_rstm_header(f, fsize, &h, err, errlen);
     if (st != BRSTM_OK) {
         fclose(f);
@@ -381,8 +382,10 @@ BrstmStatus brstm_open(const char *path, Brstm *out, char *err, size_t errlen)
     info->adpc_entry_count = 0;
     out->adpc_entries_offset = 0;
     if (h.adpc_size >= 8) {
+        /* parse_head_part1 already rejects zero channels; the guard keeps the
+         * division safe on its own, without relying on that earlier check. */
         uint32_t entry_bytes = info->channels * 4;
-        uint32_t count = (h.adpc_size - 8) / entry_bytes;
+        uint32_t count = entry_bytes ? (h.adpc_size - 8) / entry_bytes : 0;
         if (count > 0) {
             info->has_adpc = 1;
             info->adpc_entry_count = count;

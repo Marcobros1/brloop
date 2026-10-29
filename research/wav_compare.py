@@ -1,8 +1,9 @@
 """Compare the two decoded WAVs (normal vs 'final lap' variant)."""
 import struct
 import os
+import tempfile
 
-OUT = os.environ["LOCALAPPDATA"] + r"\Temp\opencode\brstm_exp"
+OUT = tempfile.mkdtemp(prefix="brstm_exp_")
 
 
 def read_wav(path):

@@ -13,10 +13,11 @@ Generates audition snippets (normal crossing and speeded crossing).
 """
 import os
 import struct
+import tempfile
 import time
 import wave
 
-OUT = os.environ["LOCALAPPDATA"] + r"\Temp\opencode\brstm_exp"
+OUT = tempfile.mkdtemp(prefix="brstm_exp_")
 WAV_IN = OUT + r"\uTTC_full.wav"
 LOOP_START = 5634048
 LOOP_END = 12786908

@@ -7,10 +7,11 @@ layout nibble/header conventions are verified empirically here.
 import os
 import struct
 import sys
+import tempfile
 
 COL = r"<personal-path> Kart Wii Retro Rewind"
 FILE = os.path.join(COL, "uTTC_N.brstm")
-REF_WAV = os.environ["LOCALAPPDATA"] + r"\Temp\opencode\brstm_exp\uTTC_full.wav"
+REF_WAV = os.path.join(tempfile.mkdtemp(prefix="brstm_exp_"), "uTTC_full.wav")
 
 
 def parse(path):

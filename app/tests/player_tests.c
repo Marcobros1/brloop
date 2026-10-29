@@ -744,7 +744,7 @@ static void test_seek(void)
 
     /* Linear reference pass with the loop off. */
     player_set_loop(p, 0);
-    ref = (int16_t *)malloc((size_t)total * ch * sizeof(int16_t));
+    ref = (int16_t *)calloc((size_t)total * ch, sizeof(int16_t));
     if (!ref) {
         check(0, "reference buffer allocated for %u frames", total);
         player_close(p);
@@ -872,7 +872,7 @@ static void test_channel_pair(void)
 
     /* Linear reference pass (loop off) over every source channel. */
     player_set_loop(p, 0);
-    ref = (int16_t *)malloc((size_t)total * ch * sizeof(int16_t));
+    ref = (int16_t *)calloc((size_t)total * ch, sizeof(int16_t));
     if (!ref) {
         check(0, "reference buffer allocated for %u frames", total);
         player_close(p);
@@ -891,6 +891,12 @@ static void test_channel_pair(void)
     }
     check(ref_len == total, "linear pass covers the file (%u frames)",
           ref_len);
+    if (ref_len != total) {
+        free(ref);
+        player_close(p);
+        player_destroy(p);
+        return;
+    }
     (void)player_render(p, g_chunk, 16); /* drives the end-of-stream state */
 
     /* Default output equals every source channel. */

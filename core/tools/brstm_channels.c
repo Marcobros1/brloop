@@ -356,7 +356,10 @@ static void dumps_write_block(WavDumps *d, const int16_t *pcm, uint32_t stride,
                     r += v;
             }
             dst[s * 2] = (int16_t)(l / (int32_t)nl);
-            dst[s * 2 + 1] = (int16_t)(r / (int32_t)nr);
+            /* Mono has no right-hand channel: copy the mono signal to both
+             * sides so the fold is audible in both ears. */
+            dst[s * 2 + 1] = nr > 0 ? (int16_t)(r / (int32_t)nr)
+                                    : dst[s * 2];
         }
         if (wav_write(&d->fold, dst, frames) != 0)
             fail("wav write failed (fold)");
