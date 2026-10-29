@@ -114,7 +114,8 @@ uint32_t player_device_rate(uint32_t sample_rate, uint32_t speed_ppm)
 
 /* device_rate with the ppm clamp applied: the speed actually in force,
  * derived from the stored value (UI can only set 1.0x/Final Lap today, but
- * set_speed accepts any value in range, so the clamp lives here too). */
+ * set_speed accepts any value in range, so the clamp lives here too).
+ * Caller holds the lock: reads speed_ppm and the file header. */
 static uint32_t current_device_rate(const Player *p)
 {
     uint32_t ppm = p->speed_ppm;
@@ -172,6 +173,7 @@ static int decode_block_locked(Player *p, uint32_t block)
 }
 
 /* Reset the decoder to the start of the file. */
+/* Caller holds the lock. Rewinds the decode cursor to the file start. */
 static void reset_decode_locked(Player *p)
 {
     const BrstmInfo *info = &p->brstm.info;
@@ -343,6 +345,7 @@ static void harvest_slots_locked(Player *p)
 
 /* True while any queued slot is still audible (used by finish_check and
  * by tests to know the queue drained). */
+/* Caller holds the lock: reads slot_busy[]. */
 static int any_slot_busy(const Player *p)
 {
     for (uint32_t i = 0; i < AUDIO_OUT_SLOTS; i++)
@@ -387,6 +390,8 @@ static void fill_slots_locked(Player *p)
 }
 
 /* End reached and everything queued has been heard. */
+/* Caller holds the lock. Moves to FINISHED once the end is reached and the
+ * queue has drained. */
 static void finish_check_locked(Player *p)
 {
     if (p->state == PLAYER_PLAYING && p->finish_pending
@@ -399,6 +404,10 @@ static void finish_check_locked(Player *p)
 
 /* Close and reopen the device at the current speed, preserving the position
  * of the oldest buffer the device has not played yet. */
+/* Caller holds the lock. Closes and reopens waveOut for the current channel
+ * count and rate, resuming from the oldest buffer the device has not played.
+ * Used only when the device format changes; a stereo-to-stereo pair switch
+ * does not come through here. */
 static void reopen_device_locked(Player *p)
 {
     uint32_t resume = p->cursor;

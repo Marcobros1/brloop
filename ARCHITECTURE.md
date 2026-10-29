@@ -79,6 +79,30 @@ contain a zeroed table, so the engine can fall back to carried decoder state.
 The loop is applied to source sample positions, independently of the device
 rate used for Final Lap speed.
 
+## Player state ownership
+
+Every field of `Player` is protected by `p->cs`. The table lists who may write
+each group, so a change that breaks the rule is visible in review.
+
+| Group | Fields | Written by | Read by |
+|---|---|---|---|
+| Lock | `cs` | `lock`/`unlock` only | all |
+| File and buffers | `brstm`, `file_open`, `raw`, `pcm`, `chbuf`, `slotbuf` | `player_open`, `player_close`, `player_destroy` (lock held) | decode and render (lock held) |
+| Decode cursor | `cursor`, `carried`, `carried_block`, `block_entering`, `buf_block`, `prev_entering`, `prev_block`, `have_prev` | `decode_block_locked`, `reset_decode_locked`, `rewind_to_locked`, `seek_decode_to_locked`, `render_locked` | same, plus `player_get_state` for `cursor` |
+| Loop capture | `loop_block`, `loop_entering`, `have_loop_state` | `player_open`, `render_locked`, `seek_decode_to_locked` | `render_locked` |
+| Runtime | `state`, `position`, `wraps`, `last_wrap_position`, `loop_enabled`, `speed_ppm`, `channel_pair`, `audio_error`, `decode_failed`, `finish_pending` | the `player_*` transport functions, `engine_thread`, `finish_check_locked` | `player_get_state` |
+| Device queue | `audio`, `done_event`, `slot_busy[]`, `slot_src[]`, `slot_frames[]` | `reopen_device_locked`, `close_device_locked`, `harvest_slots_locked`, `fill_slots_locked`, `engine_thread` | `any_slot_busy`, `player_get_state` |
+| Engine thread | `headless`, `thread`, `stop_event`, `cmd_event`, `thread_exit` | `player_create`, `player_destroy` | `engine_thread`, `wake_engine`, every transport function (`headless` selects the device path) |
+
+Functions named `*_locked` assume the caller holds `cs` and never take it
+themselves. Their comments say so. The only callers outside the public API are
+`engine_thread`, which takes the lock before every call, and the public
+functions.
+
+`player_get_state` is the only reader that touches several groups at once. It
+takes the lock once and copies a snapshot, so the UI never sees a half-updated
+state.
+
 ## Public state model
 
 ```text
