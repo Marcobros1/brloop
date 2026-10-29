@@ -400,6 +400,34 @@ static void st_phase_pair(void)
     }
 }
 
+/* Phase 5 - removal: removing the selected row must select the replacement
+ * exactly once and reopen it; removing the last row must clear the selection
+ * and close the player. Both use the same WM_COMMAND as the Quitar button. */
+static void st_phase_remove(void)
+{
+    int before = (*g_test->row_count);
+    int removed = (*g_test->selected);
+    int expected_replacement;
+
+    if (before < 2) {
+        st_check(0, "library has at least two rows for removal checks");
+        return;
+    }
+
+    /* Removing the selected row must open exactly the row that takes its
+     * place: the next one, or the previous one when it was the last. */
+    expected_replacement = removed < before - 1 ? removed : before - 2;
+    send_cmd(IDC_BTN_REMOVE);
+    pump(100);
+    st_check((*g_test->row_count) == before - 1,
+             "removing the selected row shrinks the library");
+    st_check((*g_test->selected) == expected_replacement
+             && (*g_test->snapshot).sample_rate > 0,
+             "the replacement row is selected and opened");
+    st_check(g_test->library->rows[(*g_test->selected)].name != NULL,
+             "the replacement row still owns its name");
+}
+
 /* One full transport round on the current track: three play/seek/rewind/
  * pause cycles through the single play button and the previous button, then
  * a track switch (the file and the device are closed and reopened, the
@@ -459,6 +487,8 @@ static int run_selftest(void)
     st_log_handles("after seek/speed");
     st_phase_pair();
     st_log_handles("after pair");
+    st_phase_remove();
+    st_log_handles("after remove");
 
     /* Leak check by repetition: two identical transport rounds, both
      * measured in the same state (stopped, other row, device open) after

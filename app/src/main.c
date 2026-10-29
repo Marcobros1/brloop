@@ -26,6 +26,7 @@
 #include "ui_types.h"
 #include "ui_selftest.h"
 #include "cli_options.h"
+#include "library.h"
 
 /* ------------------------------------------------------------- app state --
  * Win32 pattern: one instance of the whole UI lives in file-scope globals
@@ -57,17 +58,6 @@ static int g_selftest_mode;             /* running as a scripted self-test */
 static FILE *g_selftest_report;         /* optional report file (see load_args) */
 static wchar_t g_selftest_invalid_path[1024];/* path of a file that must be rejected */
 static int g_has_invalid_path;
-
-/* Heap copy of a wide string (the library owns every path/name it keeps;
- * NULL on OOM, which callers turn into an error message). */
-static wchar_t *dup_wide(const wchar_t *s)
-{
-    size_t n = wcslen(s) + 1;
-    wchar_t *d = (wchar_t *)malloc(n * sizeof(wchar_t));
-    if (d)
-        memcpy(d, s, n * sizeof(wchar_t));
-    return d;
-}
 
 /* UTF-16 path -> ANSI path for the core (fopen). Fails clearly when the
  * path cannot be represented in the system code page. */
@@ -268,7 +258,7 @@ static int add_track(const wchar_t *path, wchar_t *errbuf, size_t errlen)
     char err[512];
     Brstm tmp;
     BrstmStatus st;
-    TrackRow *row;
+    LibraryTrackInfo info;
 
     if (!narrow_path(path, narrow, sizeof narrow)) {
         swprintf(errbuf, errlen, L"«%s»: ruta no representable en ANSI",
@@ -283,38 +273,18 @@ static int add_track(const wchar_t *path, wchar_t *errbuf, size_t errlen)
         return -1;
     }
 
-    if (g_library.count == g_library.capacity) {
-        int cap = g_library.capacity ? g_library.capacity * 2 : 8;
-        TrackRow *rows = (TrackRow *)realloc(g_library.rows,
-                                             (size_t)cap * sizeof *rows);
-        if (!rows) {
-            brstm_close(&tmp);
-            swprintf(errbuf, errlen, L"«%s»: sin memoria", file_name_of(path));
-            return -1;
-        }
-        g_library.rows = rows;
-        g_library.capacity = cap;
-    }
-    row = &g_library.rows[g_library.count];
-    memset(row, 0, sizeof *row);
-    row->path = dup_wide(path);
-    row->name = dup_wide(file_name_of(path));
-    if (!row->path || !row->name) {
-        free(row->path);
-        free(row->name);
-        brstm_close(&tmp);
-        swprintf(errbuf, errlen, L"sin memoria");
-        return -1;
-    }
-    row->rate = tmp.info.sample_rate;
-    row->channels = tmp.info.channels;
-    row->total = tmp.info.total_samples;
-    row->loop = tmp.info.loop;
-    row->loop_start = tmp.info.loop_start;
+    info.rate = tmp.info.sample_rate;
+    info.channels = tmp.info.channels;
+    info.total = tmp.info.total_samples;
+    info.loop = tmp.info.loop;
+    info.loop_start = tmp.info.loop_start;
     brstm_close(&tmp);
 
-    list_insert_row(g_library.count, row);
-    g_library.count++;
+    if (library_add(&g_library, path, file_name_of(path), &info) != 0) {
+        swprintf(errbuf, errlen, L"«%s»: sin memoria", file_name_of(path));
+        return -1;
+    }
+    list_insert_row(g_library.count - 1, &g_library.rows[g_library.count - 1]);
     return 0;
 }
 
@@ -323,29 +293,29 @@ static int add_track(const wchar_t *path, wchar_t *errbuf, size_t errlen)
  * (or none) becomes the selection, keeping g_library.selected_index always valid. */
 static void remove_track(int idx)
 {
-    TrackRow *row;
+    int was_selected;
+    int replacement;
+
     if (idx < 0 || idx >= g_library.count)
         return;
-    row = &g_library.rows[idx];
-    free(row->path);
-    free(row->name);
-    memmove(&g_library.rows[idx], &g_library.rows[idx + 1],
-            (size_t)(g_library.count - idx - 1) * sizeof *g_library.rows);
-    g_library.count--;
+    was_selected = idx == g_library.selected_index;
+    replacement = library_remove(&g_library, idx);
     ListView_DeleteItem(g_controls.list, idx);
 
-    if (g_library.selected_index == idx) {
+    if (was_selected) {
         player_stop(g_player);
         player_close(g_player);
-        g_library.selected_index = -1;
         clear_info_panel();
-        if (g_library.count > 0)
-            ListView_SetItemState(g_controls.list,
-                                  (idx < g_library.count) ? idx : g_library.count - 1,
+        if (replacement >= 0) {
+            /* Select and open synchronously: waiting for LVN_ITEMCHANGED would
+             * leave the player closed until the message loop runs again. The
+             * list selection is then kept in step with the library state. */
+            ListView_SetItemState(g_controls.list, replacement,
                                   LVIS_SELECTED | LVIS_FOCUSED,
                                   LVIS_SELECTED | LVIS_FOCUSED);
-    } else if (g_library.selected_index > idx) {
-        g_library.selected_index--;
+            g_library.selected_index = -1;
+            select_track(replacement);
+        }
     }
 }
 
@@ -357,12 +327,7 @@ static void remove_all(void)
 {
     player_stop(g_player);
     player_close(g_player);
-    for (int i = 0; i < g_library.count; i++) {
-        free(g_library.rows[i].path);
-        free(g_library.rows[i].name);
-    }
-    g_library.count = 0;
-    g_library.selected_index = -1;
+    library_clear(&g_library);
     ListView_DeleteAllItems(g_controls.list);
     clear_info_panel();
     set_status(L"Lista vacía.");
@@ -1337,23 +1302,19 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
                               LVIS_SELECTED | LVIS_FOCUSED);
 
     if (g_selftest_mode) {
-        UiSelfTestContext test = {
-            g_hwnd,
-            &g_controls,
-            g_player,
-            &g_player_snapshot,
-            &g_library.count,
-            &g_library.selected_index,
-            g_selftest_invalid_path,
-            g_has_invalid_path,
-            g_selftest_report,
-            cli_add_track,
-            NULL,
-            0,
-            0,
-            0,
-            0
-        };
+        UiSelfTestContext test = {0};
+        test.window = g_hwnd;
+        test.controls = &g_controls;
+        test.player = g_player;
+        test.snapshot = &g_player_snapshot;
+        test.row_count = &g_library.count;
+        test.selected = &g_library.selected_index;
+        test.invalid_path = g_selftest_invalid_path;
+        test.has_invalid_path = g_has_invalid_path;
+        test.report = g_selftest_report;
+        test.add_track = cli_add_track;
+        test.add_track_context = NULL;
+        test.library = &g_library;
         rc = ui_selftest_run(&test);
         g_selftest_report = NULL;
         LocalFree(argv);
