@@ -27,6 +27,7 @@
 #include "ui_selftest.h"
 #include "cli_options.h"
 #include "library.h"
+#include "transport.h"
 
 /* ------------------------------------------------------------- app state --
  * Win32 pattern: one instance of the whole UI lives in file-scope globals
@@ -992,16 +993,17 @@ static void on_command(int id)
          * be up to one tick behind). FINISHED restarts from the beginning,
          * because "play" on a finished song means hearing it again. */
         PlayerState st = player_get_state(g_player).state;
-        if (st == PLAYER_PAUSED) {
+        TransportPlayAction action = transport_play_action(st);
+        if (action == TRANSPORT_PLAY_RESUME) {
             player_play(g_player);
             set_status(L"Reanudando…");
-        } else if (st == PLAYER_FINISHED) {
+        } else if (action == TRANSPORT_PLAY_RESTART) {
             player_seek(g_player, 0);
             if (player_play(g_player) == 0)
                 set_status(L"Reproduciendo desde el inicio…");
             else
                 set_status(L"No se puede reproducir (sin salida de audio).");
-        } else if (st == PLAYER_PLAYING) {
+        } else if (action == TRANSPORT_PLAY_PAUSE) {
             player_pause(g_player);
             set_status(L"Pausado.");
         } else {
@@ -1018,10 +1020,9 @@ static void on_command(int id)
          * over"; at the beginning it means "previous track" (wrapping to
          * the last row). Keeps playing across a track change. */
         PlayerSnapshot s = player_get_state(g_player);
-        int prev = g_library.selected_index > 0 ? g_library.selected_index - 1
-                                  : (g_library.count > 0 ? g_library.count - 1 : -1);
-        if (prev >= 0 && prev != g_library.selected_index && s.sample_rate > 0
-            && s.position <= 3u * (uint64_t)s.sample_rate) {
+        int prev = transport_previous_index(g_library.selected_index, g_library.count);
+        if (transport_previous_action(s.position, s.sample_rate) == TRANSPORT_PREVIOUS_TRACK
+            && prev >= 0 && prev != g_library.selected_index) {
             int wasPlaying = s.state == PLAYER_PLAYING;
             change_track(prev, wasPlaying);
             set_status(L"Canción anterior.");
@@ -1034,9 +1035,9 @@ static void on_command(int id)
     case IDC_BTN_NEXT: {
         int next;
         int wasPlaying;
-        if (g_library.selected_index < 0 || g_library.count <= 0)
+        next = transport_next_index(g_library.selected_index, g_library.count);
+        if (next < 0)
             break;
-        next = (g_library.selected_index + 1) % g_library.count;
         /* Keep playing across the change if the user was listening. */
         wasPlaying = player_get_state(g_player).state == PLAYER_PLAYING;
         change_track(next, wasPlaying);
@@ -1059,13 +1060,10 @@ static void on_command(int id)
         PlayerSnapshot s = player_get_state(g_player);
         wchar_t msg[80];
         int next;
-        if (s.pair_count == 0)
-            break;
         /* The UI never offers the engine's internal mix-all value (-1). */
-        if (s.pair_sel < 0 || s.pair_sel + 1 >= (int)s.pair_count)
-            next = 0;
-        else
-            next = s.pair_sel + 1;
+        next = transport_next_pair(s.pair_sel, s.pair_count);
+        if (next < 0)
+            break;
         if (player_set_channel_pair(g_player, next) != 0)
             break;
         swprintf(msg, 80, L"Versión %d: canales %d-%d.",
