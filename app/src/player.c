@@ -23,6 +23,7 @@
 #include "player.h"
 
 #include "audio_out.h"
+#include "resampler.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -48,6 +49,7 @@ struct Player {
 
     /* Decode cursor. */
     uint32_t cursor;                       /* next source sample to produce */
+    Resampler resampler;                   /* fractional read, used when speed != 1.0x */
     DspAdpcmState next_decoder_state[BRSTM_MAX_CHANNELS];
     uint32_t next_block;                /* block `next_decoder_state` enters */
     DspAdpcmState block_start_state[BRSTM_MAX_CHANNELS]; /* enters decoded_block */
@@ -172,7 +174,14 @@ static int decode_block_locked(Player *p, uint32_t block)
     return 1;
 }
 
-/* Reset the decoder to the start of the file. */
+/* Caller holds the lock. Drops the resampler history and fraction so the next
+ * output is interpolated only from samples at the new position. */
+static void reset_resampler_locked(Player *p)
+{
+    p->resampler.frac = 0;
+    memset(p->resampler.history, 0, sizeof p->resampler.history);
+}
+
 /* Caller holds the lock. Rewinds the decode cursor to the file start. */
 static void reset_decode_locked(Player *p)
 {
@@ -186,6 +195,7 @@ static void reset_decode_locked(Player *p)
     p->previous_block = PLAYER_BLOCK_NONE;
     p->have_prev = 0;
     p->cursor = 0;
+    reset_resampler_locked(p);
 }
 
 /* Move the cursor back to `sample` when its decoder state is still cached.
@@ -261,12 +271,71 @@ static int seek_decode_to_locked(Player *p, uint32_t sample)
     return 1;
 }
 
+/* Pull one source frame for the resampler: the same cursor, loop and block
+ * rules as render_locked, one frame at a time. Returns 0 at a stop, which
+ * ends the render exactly where render_locked would. Caller holds the lock. */
+static int pull_source_frame_locked(void *ctx, int16_t *frame)
+{
+    Player *p = (Player *)ctx;
+    const BrstmInfo *info = &p->brstm.info;
+    uint32_t channels = info->channels;
+
+    if (p->cursor >= info->total_samples) {
+        if (p->loop_enabled && info->loop && p->have_loop_state) {
+            p->wraps++;
+            p->last_wrap_position = info->loop_start;
+            p->cursor = info->loop_start;
+            memcpy(p->next_decoder_state, p->loop_entering, sizeof p->next_decoder_state);
+            p->next_block = p->loop_block;
+            p->decoded_block = PLAYER_BLOCK_NONE;
+            p->have_prev = 0;
+        } else {
+            return 0;
+        }
+    }
+
+    uint32_t block = brstm_block_for_sample(&p->brstm, p->cursor);
+    if (block != p->decoded_block) {
+        if (block != p->next_block)
+            return 0;
+        if (block == p->loop_block && !p->have_loop_state) {
+            memcpy(p->loop_entering, p->next_decoder_state, sizeof p->loop_entering);
+            p->have_loop_state = 1;
+        }
+        if (!decode_block_locked(p, block))
+            return 0;
+    }
+
+    uint32_t bstart = brstm_block_start_sample(&p->brstm, block);
+    uint32_t off = p->cursor - bstart;
+    const int16_t *src = p->block_pcm + (size_t)off * channels;
+    int pair = p->channel_pair;
+    if (pair >= 0) {
+        uint32_t lc = (uint32_t)pair * 2;
+        frame[0] = src[lc];
+        frame[1] = src[lc + 1];
+    } else {
+        memcpy(frame, src, (size_t)channels * sizeof(int16_t));
+    }
+    p->cursor++;
+    return 1;
+}
+
 /* Produce interleaved PCM16 into out. Caller holds the lock and the state
  * is PLAYING. */
 static uint32_t render_locked(Player *p, int16_t *out, uint32_t frames)
 {
     const BrstmInfo *info = &p->brstm.info;
     uint32_t channels = info->channels;
+    uint32_t step = resampler_step(info->sample_rate, current_device_rate(p));
+
+    if (step != RESAMPLER_ONE) {
+        uint32_t out_channels = p->channel_pair >= 0 ? 2u : channels;
+        if (p->resampler.channels != out_channels)
+            resampler_reset(&p->resampler, out_channels);
+        return (uint32_t)resampler_render(&p->resampler, step, pull_source_frame_locked,
+                                          p, out, frames);
+    }
     /* A selected pair renders source channels 2p/2p+1 as plain stereo; the
      * default emits every source channel (the fold happens at write time).
      * The pair is validated in player_set_channel_pair and reset on open. */
@@ -436,7 +505,7 @@ static void reopen_device_locked(Player *p)
                     ? (uint16_t)2
                     : (uint16_t)p->brstm.info.channels;
     MMRESULT r = audio_open(&p->audio, dev_ch,
-                            current_device_rate(p), PLAYER_SLOT_FRAMES,
+                            p->brstm.info.sample_rate, PLAYER_SLOT_FRAMES,
                             p->done_event);
     p->audio_error = r;
     if (r != MMSYSERR_NOERROR) {
@@ -776,6 +845,7 @@ int player_seek(Player *p, uint64_t frame)
     if (seek_decode_to_locked(p, (uint32_t)frame)) {
         p->cursor = (uint32_t)frame;
         p->position = frame;
+        reset_resampler_locked(p);
         p->decode_failed = 0;
         p->finish_pending = 0;
         if (p->state == PLAYER_FINISHED)
@@ -793,20 +863,19 @@ int player_seek(Player *p, uint64_t frame)
     return rc;
 }
 
-/* Change speed (ppm of 1e6). Clamped to [0.25x, 4x]; if audible, the
- * device is reopened at the new rate, which resumes from the first buffer
- * not yet heard - position and loop bounds survive because reopen_device_
- * locked rewinds the cursor to that point instead of restarting. */
+/* Change speed (ppm of 1e6). Clamped to [0.25x, 4x]. The device keeps the
+ * file's sample rate, so no reopen is needed: the resampler step follows the
+ * new speed from the next block and playback continues without a gap. */
 void player_set_speed(Player *p, uint32_t speed_ppm)
 {
     lock(p);
     if (speed_ppm < PLAYER_MIN_PPM) speed_ppm = PLAYER_MIN_PPM;
     if (speed_ppm > PLAYER_MAX_PPM) speed_ppm = PLAYER_MAX_PPM;
     if (speed_ppm != p->speed_ppm) {
+        /* The resampler history is kept: it holds the frames just before the
+         * cursor, which do not depend on the step, so the next output is
+         * interpolated from the same audio at the new speed. */
         p->speed_ppm = speed_ppm;
-        if (p->file_open && !p->headless
-            && (p->state == PLAYER_PLAYING || p->state == PLAYER_PAUSED))
-            reopen_device_locked(p);
     }
     unlock(p);
     wake_engine(p);
