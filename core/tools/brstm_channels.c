@@ -31,12 +31,13 @@
                       * fine enough to follow musical phrasing, coarse
                       * enough to ignore single-sample detail */
 
-/* Hard error for the whole tool: print and leave. Used only after the BRSTM
- * is open, where a failure (OOM, read error) means no result is trustworthy. */
-static void fail(const char *msg)
+/* Report a fatal error and return 1. Functions that hold resources return
+ * this to main() instead of exiting, so main() releases everything on every
+ * path. */
+static int fail(const char *msg)
 {
     fprintf(stderr, "error: %s\n", msg);
-    exit(1);
+    return 1;
 }
 
 /* i16abs with an int32 intermediate: -(-32768) is not representable in
@@ -190,15 +191,17 @@ typedef struct {
     uint32_t cap;                 /* allocated row capacity */
 } Envelope;
 
-static void envelope_init(Envelope *env, uint32_t total_samples)
+/* Returns 0 on success, or -1 when the row buffer cannot be allocated. */
+static int envelope_init(Envelope *env, uint32_t total_samples)
 {
     env->n = 0;
     env->rows = 0;
-    env->cap = total_samples / ENV_WIN + 2; /* exact ceiling, +1 for a
-        non-multiple length, +1 so the trailing partial flush always fits */
+    env->row = NULL;
+    /* One row per full window, plus one for the trailing partial window and
+     * one spare so the final flush always fits. */
+    env->cap = total_samples / ENV_WIN + 2;
     env->row = (double *)malloc((size_t)env->cap * MAX_CH * sizeof(double));
-    if (!env->row)
-        fail("out of memory (envelope)");
+    return env->row ? 0 : -1;
 }
 
 /* Append one decoded block slice to the envelope. pcm is channel-major with
@@ -274,78 +277,85 @@ typedef struct {
     WavWriter pair[MAX_CH];
     WavWriter fold;              /* even/odd fold, what the player plays */
     int pair_open[MAX_CH];
+    int16_t *scratch;            /* shared interleave buffer, one block wide */
 } WavDumps;
 
-static void dumps_open(WavDumps *d, const char *dir, const char *stem,
-                       const BrstmInfo *info)
+static int dumps_close(WavDumps *d);
+
+/* Open every WAV dump and allocate the shared scratch buffer. On failure the
+ * files opened so far are closed before returning -1, so no handle leaks. */
+static int dumps_open(WavDumps *d, const char *dir, const char *stem,
+                      const BrstmInfo *info)
 {
     char pth[1024];
 
     memset(d, 0, sizeof *d);
     d->dir = dir;
     d->stem = stem;
-    if (!dir) {
-        d->enabled = 0;
-        return;
-    }
+    if (!dir)
+        return 0;
+
+    d->scratch = (int16_t *)malloc((size_t)info->samples_per_block * 2
+                                   * sizeof(int16_t));
+    if (!d->scratch)
+        return -1;
+
     for (uint32_t c = 0; c < info->channels; c++) {
         snprintf(pth, sizeof pth, "%s\\%s_ch%u.wav", dir, stem, c);
         if (wav_open(&d->mono[c], pth, 1, info->sample_rate) != 0) {
             fprintf(stderr, "error: cannot write %s\n", pth);
-            exit(1);
+            dumps_close(d);
+            return -1;
         }
     }
     for (uint32_t c = 0; c + 1 < info->channels; c += 2) {
         snprintf(pth, sizeof pth, "%s\\%s_p%u-%u.wav", dir, stem, c, c + 1);
         if (wav_open(&d->pair[c], pth, 2, info->sample_rate) != 0) {
             fprintf(stderr, "error: cannot write %s\n", pth);
-            exit(1);
+            dumps_close(d);
+            return -1;
         }
         d->pair_open[c] = 1;
     }
     snprintf(pth, sizeof pth, "%s\\%s_fold.wav", dir, stem);
     if (wav_open(&d->fold, pth, 2, info->sample_rate) != 0) {
         fprintf(stderr, "error: cannot write fold wav\n");
-        exit(1);
+        dumps_close(d);
+        return -1;
     }
     d->enabled = 1;
+    return 0;
 }
 
 /* Write this block's PCM to every open dump. The pair/interleave buffers are
  * allocated per call: blocks are at most samples_per_block long (14336
  * samples = ~57 KB), and keeping the allocation out of the caller keeps the
  * decode loop free of dump concerns. */
-static void dumps_write_block(WavDumps *d, const int16_t *pcm, uint32_t stride,
-                              uint32_t nc, uint32_t frames)
+/* Returns 0 on success, or -1 on a write error. Uses the scratch buffer
+ * allocated by dumps_open, so the decode loop does no allocation here. */
+static int dumps_write_block(WavDumps *d, const int16_t *pcm, uint32_t stride,
+                             uint32_t nc, uint32_t frames)
 {
     if (!d->enabled)
-        return;
+        return 0;
 
     for (uint32_t c = 0; c < nc; c++)
         if (wav_write(&d->mono[c], pcm + (size_t)c * stride, frames) != 0)
-            fail("wav write failed (mono)");
+            return -1;
 
     for (uint32_t c = 0; c + 1 < nc; c += 2) {
-        int16_t *dst;
         if (!d->pair_open[c])
             continue;
-        dst = (int16_t *)malloc((size_t)frames * 2 * sizeof(int16_t));
-        if (!dst)
-            fail("out of memory (pair)");
         for (uint32_t s = 0; s < frames; s++) {
-            dst[s * 2] = pcm[(size_t)c * stride + s];
-            dst[s * 2 + 1] = pcm[(size_t)(c + 1) * stride + s];
+            d->scratch[s * 2] = pcm[(size_t)c * stride + s];
+            d->scratch[s * 2 + 1] = pcm[(size_t)(c + 1) * stride + s];
         }
-        if (wav_write(&d->pair[c], dst, frames) != 0)
-            fail("wav write failed (pair)");
-        free(dst);
+        if (wav_write(&d->pair[c], d->scratch, frames) != 0)
+            return -1;
     }
 
     {   /* Same even/odd fold as audio_out.c for reference. */
         uint32_t nl = (nc + 1) / 2, nr = nc / 2;
-        int16_t *dst = (int16_t *)malloc((size_t)frames * 2 * sizeof(int16_t));
-        if (!dst)
-            fail("out of memory (fold)");
         for (uint32_t s = 0; s < frames; s++) {
             int32_t l = 0, r = 0;
             for (uint32_t c = 0; c < nc; c++) {
@@ -355,30 +365,36 @@ static void dumps_write_block(WavDumps *d, const int16_t *pcm, uint32_t stride,
                 else
                     r += v;
             }
-            dst[s * 2] = (int16_t)(l / (int32_t)nl);
+            d->scratch[s * 2] = (int16_t)(l / (int32_t)nl);
             /* Mono has no right-hand channel: copy the mono signal to both
              * sides so the fold is audible in both ears. */
-            dst[s * 2 + 1] = nr > 0 ? (int16_t)(r / (int32_t)nr)
-                                    : dst[s * 2];
+            d->scratch[s * 2 + 1] = nr > 0 ? (int16_t)(r / (int32_t)nr)
+                                           : d->scratch[s * 2];
         }
-        if (wav_write(&d->fold, dst, frames) != 0)
-            fail("wav write failed (fold)");
-        free(dst);
+        if (wav_write(&d->fold, d->scratch, frames) != 0)
+            return -1;
     }
+    return 0;
 }
 
-static void dumps_close(WavDumps *d)
+/* Close every writer that is open and free the scratch buffer. Safe to call
+ * on a partially opened set: only handles that were actually opened are
+ * touched. Returns 0, or -1 if a close reported an error. */
+static int dumps_close(WavDumps *d)
 {
-    if (!d->enabled)
-        return;
+    int rc = 0;
     for (uint32_t c = 0; c < MAX_CH; c++) {
         if (d->mono[c].file && wav_close(&d->mono[c]) != 0)
-            fail("wav close failed");
-        if (d->pair_open[c] && wav_close(&d->pair[c]) != 0)
-            fail("wav close failed (pair)");
+            rc = -1;
+        if (d->pair_open[c] && d->pair[c].file && wav_close(&d->pair[c]) != 0)
+            rc = -1;
     }
-    if (wav_close(&d->fold) != 0)
-        fail("wav close failed (fold)");
+    if (d->fold.file && wav_close(&d->fold) != 0)
+        rc = -1;
+    free(d->scratch);
+    d->scratch = NULL;
+    d->enabled = 0;
+    return rc;
 }
 
 /* ---------------------------------------------------------------- decode */
@@ -388,20 +404,28 @@ static void dumps_close(WavDumps *d)
  * file as the player plays it; ADPC per-block states are not needed here).
  * Temp buffers live inside this function: they are meaningless outside one
  * decode pass. */
-static void decode_file(Brstm *b, ChannelStats *st, Envelope *env,
-                        WavDumps *dumps)
+/* Returns 0 on success or 1 on error. Every buffer allocated here is released
+ * on the single exit path below, whichever step fails. */
+static int decode_file(Brstm *b, ChannelStats *st, Envelope *env,
+                       WavDumps *dumps)
 {
     const BrstmInfo *info = &b->info;
     const uint32_t nc = info->channels;
     const uint32_t stride = info->samples_per_block;
     DspAdpcmState state[MAX_CH];
-    uint8_t *raw = (uint8_t *)malloc(info->block_size);
-    int16_t *pcm = (int16_t *)malloc((size_t)nc * stride * sizeof(int16_t));
-    int16_t *chbuf = (int16_t *)malloc((size_t)stride * sizeof(int16_t));
+    uint8_t *raw = NULL;
+    int16_t *pcm = NULL;
+    int16_t *chbuf = NULL;
     BrstmStatus stcode;
+    int rc = 0;
 
-    if (!raw || !pcm || !chbuf)
-        fail("out of memory");
+    raw = (uint8_t *)malloc(info->block_size);
+    pcm = (int16_t *)malloc((size_t)nc * stride * sizeof(int16_t));
+    chbuf = (int16_t *)malloc((size_t)stride * sizeof(int16_t));
+    if (!raw || !pcm || !chbuf) {
+        rc = fail("out of memory");
+        goto done;
+    }
     memset(state, 0, sizeof state);
     for (uint32_t c = 0; c < nc; c++) { /* initial histories from HEAD p.3 */
         state[c].hist1 = info->init_hist1[c];
@@ -417,8 +441,10 @@ static void decode_file(Brstm *b, ChannelStats *st, Envelope *env,
             size_t len = 0;
             stcode = brstm_read_channel_block(b, block, c, raw,
                                               info->block_size, &len);
-            if (stcode != BRSTM_OK)
-                fail("cannot read a channel block");
+            if (stcode != BRSTM_OK) {
+                rc = fail("cannot read a channel block");
+                goto done;
+            }
             dsp_adpcm_decode(raw, len, info->coefs[c], &state[c], chbuf,
                              frames);
             memcpy(pcm + (size_t)c * stride, chbuf,
@@ -437,7 +463,10 @@ static void decode_file(Brstm *b, ChannelStats *st, Envelope *env,
         }
 
         envelope_append(env, pcm, stride, nc, frames);
-        dumps_write_block(dumps, pcm, stride, nc, frames);
+        if (dumps_write_block(dumps, pcm, stride, nc, frames) != 0) {
+            rc = fail("wav write failed");
+            goto done;
+        }
 
         /* Sample-level cross products for the Pearson matrix. The whole
          * upper triangle is accumulated here at nc^2 * frames; reducing it
@@ -462,9 +491,11 @@ static void decode_file(Brstm *b, ChannelStats *st, Envelope *env,
         }
     }
 
+done:
     free(raw);
     free(pcm);
     free(chbuf);
+    return rc;
 }
 
 /* ---------------------------------------------------------------- report */
@@ -611,6 +642,7 @@ int main(int argc, char **argv)
     ChannelStats stats;
     Envelope env;
     WavDumps dumps;
+    int rc = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--wav") == 0 && i + 1 < argc)
@@ -633,8 +665,11 @@ int main(int argc, char **argv)
         return 1;
     }
     info = &b.info;
-    if (info->channels > MAX_CH)
-        fail("more channels than the analyzer supports");
+    if (info->channels > MAX_CH) {
+        rc = fail("more channels than the analyzer supports");
+        brstm_close(&b);
+        return rc;
+    }
 
     {   /* Output basename: file name without directory or extension, used
          * as the prefix of every WAV dump. */
@@ -653,16 +688,31 @@ int main(int argc, char **argv)
     }
 
     stats_init(&stats, info->channels);
-    envelope_init(&env, info->total_samples);
-    dumps_open(&dumps, wavdir, stem, info);
+    if (envelope_init(&env, info->total_samples) != 0) {
+        rc = fail("out of memory (envelope)");
+        goto close_brstm;
+    }
+    if (dumps_open(&dumps, wavdir, stem, info) != 0) {
+        rc = fail("cannot open the WAV dumps");
+        goto free_envelope;
+    }
 
-    decode_file(&b, &stats, &env, &dumps);
+    if (decode_file(&b, &stats, &env, &dumps) != 0) {
+        rc = 1;
+        goto close_dumps;
+    }
     envelope_flush(&env, info->channels);
+    if (dumps_close(&dumps) != 0)
+        rc = fail("wav close failed");
+    else
+        print_report(path, info, &stats, &env);
+    goto free_envelope;
+
+close_dumps:
     dumps_close(&dumps);
-
-    print_report(path, info, &stats, &env);
-
-    brstm_close(&b);
+free_envelope:
     envelope_free(&env);
-    return 0;
+close_brstm:
+    brstm_close(&b);
+    return rc;
 }
