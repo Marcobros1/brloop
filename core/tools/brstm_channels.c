@@ -327,12 +327,9 @@ static int dumps_open(WavDumps *d, const char *dir, const char *stem,
     return 0;
 }
 
-/* Write this block's PCM to every open dump. The pair/interleave buffers are
- * allocated per call: blocks are at most samples_per_block long (14336
- * samples = ~57 KB), and keeping the allocation out of the caller keeps the
- * decode loop free of dump concerns. */
-/* Returns 0 on success, or -1 on a write error. Uses the scratch buffer
- * allocated by dumps_open, so the decode loop does no allocation here. */
+/* Write this block's PCM to every open dump. Returns 0 on success, or -1 on a
+ * write error. Uses the scratch buffer allocated by dumps_open, so the decode
+ * loop does no allocation here. */
 static int dumps_write_block(WavDumps *d, const int16_t *pcm, uint32_t stride,
                              uint32_t nc, uint32_t frames)
 {
@@ -356,6 +353,8 @@ static int dumps_write_block(WavDumps *d, const int16_t *pcm, uint32_t stride,
 
     {   /* Same even/odd fold as audio_out.c for reference. */
         uint32_t nl = (nc + 1) / 2, nr = nc / 2;
+        if (nl == 0)
+            return -1; /* no channels: nothing to fold */
         for (uint32_t s = 0; s < frames; s++) {
             int32_t l = 0, r = 0;
             for (uint32_t c = 0; c < nc; c++) {
