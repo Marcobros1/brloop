@@ -36,7 +36,8 @@ $srcCommon = (@(
     (Join-Path $root 'src\audio_out.c'),
     (Join-Path $root 'src\cli_options.c'),
     (Join-Path $root 'src\library.c'),
-    (Join-Path $root 'src\transport.c')
+    (Join-Path $root 'src\transport.c'),
+    (Join-Path $root 'src\resampler.c')
 ) | ForEach-Object { '"' + $_ + '"' }) -join ' '
 $srcUi = '"' + (Join-Path $root 'src\ui_selftest.c') + '"'
 # /utf-8: source and wide literals are UTF-8 (Spanish UI strings);

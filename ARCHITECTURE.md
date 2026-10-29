@@ -10,6 +10,7 @@ format and playback contracts in the headers.
 app/src/main.c         Win32 window, transport commands, track validation and ListView
 app/src/library.c      library rows: ownership of paths, names and capacity; selection repair
 app/src/transport.c    transport rules as pure functions: play/pause, previous, next, version
+app/src/resampler.c    4-point Catmull-Rom sample-rate converter for fractional speed (not wired yet)
 app/src/cli_options.c  command-line parsing (no Win32, no Player)
 app/src/ui_selftest.c  scripted window test (--selftest); borrows the window state
 app/src/player.c       playback state, decode cursor, loop, seek and speed
