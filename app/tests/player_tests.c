@@ -4,7 +4,7 @@
  *   1. Metadata of 44100/48000/51269 stereo, 4ch, 8ch and no-loop files.
  *   2. Rejection of every invalid mutant from make_invalid_cases.py and
  *      recovery afterwards.
- *   3. Speed -> device_rate mapping, including both measured FLSM
+ *   3. Speed: the reported device_rate (FLSM equivalence) and the engine at
  *      conversions (44100 -> 47104, 48000 -> 51269).
  *   4. Loop rendering byte-identical to vgmstream (-l 2 -f 0) over
  *      total + (total - loop_start) frames.
@@ -31,6 +31,7 @@
 #include <string.h>
 
 #include "player.h"
+#include "resampler.h"
 
 /* Wall-clock checks can never be exact (scheduler, driver buffering), so a
  * 4% relative tolerance is used with this absolute floor for very short
@@ -349,9 +350,11 @@ static void test_metadata(void)
     player_destroy(p);
 }
 
-/* Speed group (headless): the ppm->device_rate mapping is pure arithmetic
- * (player_device_rate) checked against the two conversions measured from
- * real FLSM output, plus the clamp bounds on set_speed through a real file. */
+/* Speed group (headless): the reported device_rate is the FLSM equivalence
+ * (player_device_rate), checked against the two conversions measured from
+ * real FLSM output, plus the clamp bounds on set_speed through a real file.
+ * The device itself always opens at the file rate; the speed is applied by
+ * the resampler, which test_speed_chain verifies sample by sample. */
 static void test_speed_mapping(void)
 {
     Player *p;
@@ -407,6 +410,127 @@ static void test_speed_mapping(void)
           "back to 1.0x -> device 48000");
     player_close(p);
     player_destroy(p);
+}
+
+typedef struct {
+    const int16_t *frames;
+    size_t n, pos;
+} SpeedSource;
+
+static int speed_source_pull(void *ctx, int16_t *frame)
+{
+    SpeedSource *s = (SpeedSource *)ctx;
+    if (s->pos >= s->n)
+        return 0;
+    frame[0] = s->frames[s->pos * 2];
+    frame[1] = s->frames[s->pos * 2 + 1];
+    s->pos++;
+    return 1;
+}
+
+/* Speed chain (headless): at FLSM speed the engine must produce exactly what
+ * the resampler produces from its own 1.0x decode of the same file. Both use
+ * the same decoder, loop and step, so any sample mismatch means the cursor,
+ * history or step in render_locked is wrong. The device opens at the file
+ * rate: the speed lives in the resampler step, not in the device. */
+static void test_speed_chain(void)
+{
+    Player *p;
+    PlayerSnapshot s;
+    char path[600], err[512];
+    int16_t *ref = NULL, *eng = NULL;
+    size_t ref_cap, total = 0, eng_n = 0, i;
+    uint32_t step;
+    int16_t buf[1024 * 2];
+    int mism = 0;
+
+    note("== speed chain: engine at FLSM vs resampler over the 1.0x decode ==");
+    p = player_create(0);
+    if (!p) {
+        check(0, "headless player created for speed chain");
+        return;
+    }
+    col_path("n_block_N.brstm", path, sizeof path);
+    err[0] = '\0';
+    if (player_open(p, path, err, sizeof err) != 0) {
+        check(0, "open n_block_N.brstm for speed chain: %s", err);
+        player_destroy(p);
+        return;
+    }
+    s = player_get_state(p);
+    ref_cap = (size_t)s.total_samples + 1;
+    ref = (int16_t *)malloc(ref_cap * 2 * sizeof(int16_t));
+    if (!ref) { check(0, "allocate 1.0x reference"); player_destroy(p); return; }
+
+    player_set_loop(p, 0);
+    player_play(p);
+    for (;;) {
+        uint32_t n = player_render(p, buf, 1024);
+        if (n == 0) break;
+        if (total + n > ref_cap) break;
+        memcpy(ref + total * 2, buf, (size_t)n * 2 * sizeof(int16_t));
+        total += n;
+    }
+    player_stop(p);
+    player_close(p);
+
+    if (player_open(p, path, err, sizeof err) != 0) {
+        check(0, "reopen for FLSM render: %s", err);
+        free(ref); player_destroy(p);
+        return;
+    }
+    player_set_loop(p, 0);
+    player_set_speed(p, PLAYER_FLSM_SPEED_PPM);
+    s = player_get_state(p);
+    step = resampler_step(s.sample_rate, player_device_rate(s.sample_rate, PLAYER_FLSM_SPEED_PPM));
+
+    eng = (int16_t *)malloc(total * 2 * sizeof(int16_t));
+    if (!eng) { check(0, "allocate FLSM render"); free(ref); player_destroy(p); return; }
+    player_play(p);
+    for (;;) {
+        uint32_t n = player_render(p, buf, 1024);
+        if (n == 0) break;
+        if (eng_n + n > total) break;
+        memcpy(eng + eng_n * 2, buf, (size_t)n * 2 * sizeof(int16_t));
+        eng_n += n;
+    }
+    player_stop(p);
+    player_close(p);
+    player_destroy(p);
+
+    {
+        SpeedSource src;
+        Resampler r;
+        int16_t *flsm = (int16_t *)malloc(eng_n * 2 * sizeof(int16_t));
+        size_t got;
+        if (!flsm) {
+            check(0, "allocate reference resample");
+            free(ref);
+            free(eng);
+            return;
+        }
+        src.frames = ref;
+        src.n = total;
+        src.pos = 0;
+        resampler_reset(&r, 2);
+        got = resampler_render(&r, step, speed_source_pull, &src, flsm, eng_n);
+
+        check(eng_n > 0 && got == eng_n,
+              "FLSM render length %zu matches the resampler reference %zu",
+              eng_n, got);
+        for (i = 0; i < got * 2; i++) {
+            if (eng[i] != flsm[i]) {
+                mism++;
+            }
+        }
+        check(mism == 0,
+              "engine at FLSM is sample-identical to the resampler over its 1.0x decode "
+              "(%d mismatched samples)", mism);
+        free(flsm);
+    }
+
+    free(ref);
+    free(eng);
 }
 
 /* Invalid group (headless): every mutant generated by make_invalid_cases.py
@@ -1700,6 +1824,7 @@ int main(int argc, char **argv)
 
     RUN("metadata", test_metadata);
     RUN("speed", test_speed_mapping);
+    RUN("speed", test_speed_chain);
     RUN("invalid", test_invalid);
     RUN("loop", test_loop_reference);
     RUN("noloop", test_no_loop_end);
