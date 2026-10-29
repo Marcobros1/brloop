@@ -7,7 +7,7 @@
  * events stay signaled until a wait consumes them).
  *
  * Loop model: the loop section is [loop_start, total_samples). On the first
- * pass the engine captures the carried DSP state at the start of the block
+ * pass the engine captures the next_decoder_state DSP state at the start of the block
  * containing loop_start (HEAD part 3 loop_hist does NOT match that state,
  * see MEMORY.md), so wraps restore the exact decoder history and the seam
  * is sample-exact without trusting the ADPC table.
@@ -41,19 +41,19 @@ struct Player {
     /* File + decode buffers. */
     Brstm brstm;
     int file_open;
-    uint8_t *raw;    /* one ADPCM block, one channel */
-    int16_t *pcm;    /* one decoded block, interleaved (render source) */
-    int16_t *chbuf;  /* one channel block */
+    uint8_t *adpcm_block;    /* one ADPCM block, one channel */
+    int16_t *block_pcm;    /* one decoded block, interleaved (render source) */
+    int16_t *channel_block;  /* one channel block */
     int16_t *slotbuf; /* PLAYER_SLOT_FRAMES * BRSTM_MAX_CHANNELS */
 
     /* Decode cursor. */
     uint32_t cursor;                       /* next source sample to produce */
-    DspAdpcmState carried[BRSTM_MAX_CHANNELS];
-    uint32_t carried_block;                /* block `carried` enters */
-    DspAdpcmState block_entering[BRSTM_MAX_CHANNELS]; /* enters buf_block */
-    uint32_t buf_block;                    /* block decoded in pcm */
-    DspAdpcmState prev_entering[BRSTM_MAX_CHANNELS];
-    uint32_t prev_block;
+    DspAdpcmState next_decoder_state[BRSTM_MAX_CHANNELS];
+    uint32_t next_block;                /* block `next_decoder_state` enters */
+    DspAdpcmState block_start_state[BRSTM_MAX_CHANNELS]; /* enters decoded_block */
+    uint32_t decoded_block;                    /* block decoded in block_pcm */
+    DspAdpcmState previous_start_state[BRSTM_MAX_CHANNELS];
+    uint32_t previous_block;
     int have_prev;
 
     /* Loop capture. */
@@ -132,8 +132,8 @@ static int at_stream_end(const Player *p)
         && !(p->loop_enabled && p->brstm.info.loop);
 }
 
-/* Decode one whole block into pcm. `carried` must enter `block` (caller
- * checks carried_block == block); on success `carried` exits the block. */
+/* Decode one whole block into block_pcm. `next_decoder_state` must enter `block` (caller
+ * checks next_block == block); on success `next_decoder_state` exits the block. */
 static int decode_block_locked(Player *p, uint32_t block)
 {
     const BrstmInfo *info = &p->brstm.info;
@@ -141,34 +141,34 @@ static int decode_block_locked(Player *p, uint32_t block)
     uint32_t channels = info->channels;
     DspAdpcmState entering[BRSTM_MAX_CHANNELS];
 
-    memcpy(entering, p->carried, sizeof entering);
+    memcpy(entering, p->next_decoder_state, sizeof entering);
 
     for (uint32_t c = 0; c < channels; c++) {
         size_t len = 0;
         BrstmStatus st = brstm_read_channel_block(&p->brstm, block, c,
-                                                  p->raw, info->block_size,
+                                                  p->adpcm_block, info->block_size,
                                                   &len);
         if (st != BRSTM_OK) {
             p->decode_failed = 1;
             p->state = PLAYER_STOPPED;
             return 0;
         }
-        dsp_adpcm_decode(p->raw, len, info->coefs[c], &p->carried[c],
-                         p->chbuf, frames);
+        dsp_adpcm_decode(p->adpcm_block, len, info->coefs[c], &p->next_decoder_state[c],
+                         p->channel_block, frames);
         for (uint32_t s = 0; s < frames; s++)
-            p->pcm[(size_t)s * channels + c] = p->chbuf[s];
+            p->block_pcm[(size_t)s * channels + c] = p->channel_block[s];
     }
 
-    if (p->buf_block != PLAYER_BLOCK_NONE) {
-        p->prev_block = p->buf_block;
-        memcpy(p->prev_entering, p->block_entering, sizeof p->prev_entering);
+    if (p->decoded_block != PLAYER_BLOCK_NONE) {
+        p->previous_block = p->decoded_block;
+        memcpy(p->previous_start_state, p->block_start_state, sizeof p->previous_start_state);
         p->have_prev = 1;
     } else {
         p->have_prev = 0;
     }
-    memcpy(p->block_entering, entering, sizeof p->block_entering);
-    p->buf_block = block;
-    p->carried_block = block + 1;
+    memcpy(p->block_start_state, entering, sizeof p->block_start_state);
+    p->decoded_block = block;
+    p->next_block = block + 1;
     return 1;
 }
 
@@ -178,12 +178,12 @@ static void reset_decode_locked(Player *p)
 {
     const BrstmInfo *info = &p->brstm.info;
     for (uint32_t c = 0; c < info->channels; c++) {
-        p->carried[c].hist1 = info->init_hist1[c];
-        p->carried[c].hist2 = info->init_hist2[c];
+        p->next_decoder_state[c].hist1 = info->init_hist1[c];
+        p->next_decoder_state[c].hist2 = info->init_hist2[c];
     }
-    p->carried_block = 0;
-    p->buf_block = PLAYER_BLOCK_NONE;
-    p->prev_block = PLAYER_BLOCK_NONE;
+    p->next_block = 0;
+    p->decoded_block = PLAYER_BLOCK_NONE;
+    p->previous_block = PLAYER_BLOCK_NONE;
     p->have_prev = 0;
     p->cursor = 0;
 }
@@ -194,14 +194,14 @@ static void reset_decode_locked(Player *p)
 static int rewind_to_locked(Player *p, uint32_t sample)
 {
     uint32_t block = brstm_block_for_sample(&p->brstm, sample);
-    if (block == p->buf_block) {
+    if (block == p->decoded_block) {
         p->cursor = sample;
         return 1;
     }
-    if (p->have_prev && block == p->prev_block) {
-        memcpy(p->carried, p->prev_entering, sizeof p->carried);
-        p->carried_block = block;
-        p->buf_block = PLAYER_BLOCK_NONE; /* force re-decode */
+    if (p->have_prev && block == p->previous_block) {
+        memcpy(p->next_decoder_state, p->previous_start_state, sizeof p->next_decoder_state);
+        p->next_block = block;
+        p->decoded_block = PLAYER_BLOCK_NONE; /* force re-decode */
         p->have_prev = 0;
         p->cursor = sample;
         return 1;
@@ -210,10 +210,10 @@ static int rewind_to_locked(Player *p, uint32_t sample)
 }
 
 /* Recreate the exact decoder state at `sample` and leave the block that
- * contains it decoded in pcm. BRSTM blocks carry no embedded history, so
+ * contains it decoded in block_pcm. BRSTM blocks carry no embedded history, so
  * the walk restarts from the closest exact anchor: the captured loop-block
  * state (valid for samples inside or after the loop block) or the file's
- * initial history at block 0. On success carried enters target_block+1.
+ * initial history at block 0. On success next_decoder_state enters target_block+1.
  * Returns 0 if a block read/decode fails along the way. */
 static int seek_decode_to_locked(Player *p, uint32_t sample)
 {
@@ -224,7 +224,7 @@ static int seek_decode_to_locked(Player *p, uint32_t sample)
 
     if (sample >= info->total_samples) {
         p->cursor = info->total_samples;
-        p->buf_block = PLAYER_BLOCK_NONE;
+        p->decoded_block = PLAYER_BLOCK_NONE;
         p->have_prev = 0;
         return 1;
     }
@@ -244,18 +244,18 @@ static int seek_decode_to_locked(Player *p, uint32_t sample)
         }
     }
 
-    p->buf_block = PLAYER_BLOCK_NONE;
+    p->decoded_block = PLAYER_BLOCK_NONE;
     p->have_prev = 0;
-    memcpy(p->carried, anchor, sizeof p->carried);
-    p->carried_block = anchor_block;
+    memcpy(p->next_decoder_state, anchor, sizeof p->next_decoder_state);
+    p->next_block = anchor_block;
 
     for (uint32_t b = anchor_block; b <= target_block; b++) {
         if (b == p->loop_block && !p->have_loop_state) {
             /* Sequential traversal of the loop block: exact capture. */
-            memcpy(p->loop_entering, p->carried, sizeof p->loop_entering);
+            memcpy(p->loop_entering, p->next_decoder_state, sizeof p->loop_entering);
             p->have_loop_state = 1;
         }
-        if (b != p->carried_block || !decode_block_locked(p, b))
+        if (b != p->next_block || !decode_block_locked(p, b))
             return 0;
     }
     return 1;
@@ -279,9 +279,9 @@ static uint32_t render_locked(Player *p, int16_t *out, uint32_t frames)
                 p->wraps++;
                 p->last_wrap_position = info->loop_start;
                 p->cursor = info->loop_start;
-                memcpy(p->carried, p->loop_entering, sizeof p->carried);
-                p->carried_block = p->loop_block;
-                p->buf_block = PLAYER_BLOCK_NONE;
+                memcpy(p->next_decoder_state, p->loop_entering, sizeof p->next_decoder_state);
+                p->next_block = p->loop_block;
+                p->decoded_block = PLAYER_BLOCK_NONE;
                 p->have_prev = 0;
             } else {
                 break;
@@ -289,12 +289,12 @@ static uint32_t render_locked(Player *p, int16_t *out, uint32_t frames)
         }
 
         uint32_t block = brstm_block_for_sample(&p->brstm, p->cursor);
-        if (block != p->buf_block) {
-            if (block != p->carried_block)
+        if (block != p->decoded_block) {
+            if (block != p->next_block)
                 break; /* non-sequential jump we cannot serve: stop */
             /* Capture the state entering the loop block on the first pass. */
             if (block == p->loop_block && !p->have_loop_state) {
-                memcpy(p->loop_entering, p->carried, sizeof p->loop_entering);
+                memcpy(p->loop_entering, p->next_decoder_state, sizeof p->loop_entering);
                 p->have_loop_state = 1;
             }
             if (!decode_block_locked(p, block))
@@ -309,7 +309,7 @@ static uint32_t render_locked(Player *p, int16_t *out, uint32_t frames)
             take = bcount - off;
 
         if (pair >= 0) {
-            const int16_t *src = p->pcm + (size_t)off * channels;
+            const int16_t *src = p->block_pcm + (size_t)off * channels;
             int16_t *dst = out + (size_t)produced * 2;
             uint32_t lc = (uint32_t)pair * 2;
             for (uint32_t s = 0; s < take; s++) {
@@ -318,7 +318,7 @@ static uint32_t render_locked(Player *p, int16_t *out, uint32_t frames)
             }
         } else {
             memcpy(out + (size_t)produced * channels,
-                   p->pcm + (size_t)off * channels,
+                   p->block_pcm + (size_t)off * channels,
                    (size_t)take * channels * sizeof(int16_t));
         }
         p->cursor += take;
@@ -520,9 +520,9 @@ Player *player_create(int enable_audio)
     p->state = PLAYER_STOPPED;
     p->speed_ppm = PLAYER_SPEED_SCALE;
     p->channel_pair = -1;
-    p->buf_block = PLAYER_BLOCK_NONE;
-    p->prev_block = PLAYER_BLOCK_NONE;
-    p->carried_block = PLAYER_BLOCK_NONE;
+    p->decoded_block = PLAYER_BLOCK_NONE;
+    p->previous_block = PLAYER_BLOCK_NONE;
+    p->next_block = PLAYER_BLOCK_NONE;
     p->loop_block = PLAYER_BLOCK_NONE;
     InitializeCriticalSection(&p->cs);
 
@@ -578,9 +578,9 @@ void player_destroy(Player *p)
         unlock(p);
     }
 
-    free(p->raw);
-    free(p->pcm);
-    free(p->chbuf);
+    free(p->adpcm_block);
+    free(p->block_pcm);
+    free(p->channel_block);
     free(p->slotbuf);
     if (p->done_event) CloseHandle(p->done_event);
     if (p->cmd_event) CloseHandle(p->cmd_event);
@@ -617,11 +617,11 @@ int player_open(Player *p, const char *path, char *err, size_t errlen)
     size_t need_pcm = (size_t)info->samples_per_block * info->channels
                     * sizeof(int16_t);
     size_t need_ch = (size_t)info->samples_per_block * sizeof(int16_t);
-    uint8_t *raw = (uint8_t *)malloc(info->block_size);
-    int16_t *pcm = (int16_t *)malloc(need_pcm);
-    int16_t *chbuf = (int16_t *)malloc(need_ch);
-    if (!raw || !pcm || !chbuf) {
-        free(raw); free(pcm); free(chbuf);
+    uint8_t *adpcm_block = (uint8_t *)malloc(info->block_size);
+    int16_t *block_pcm = (int16_t *)malloc(need_pcm);
+    int16_t *channel_block = (int16_t *)malloc(need_ch);
+    if (!adpcm_block || !block_pcm || !channel_block) {
+        free(adpcm_block); free(block_pcm); free(channel_block);
         brstm_close(&tmp);
         if (err && errlen)
             snprintf(err, errlen, "out of memory");
@@ -629,8 +629,8 @@ int player_open(Player *p, const char *path, char *err, size_t errlen)
         return -1;
     }
 
-    free(p->raw); free(p->pcm); free(p->chbuf);
-    p->raw = raw; p->pcm = pcm; p->chbuf = chbuf;
+    free(p->adpcm_block); free(p->block_pcm); free(p->channel_block);
+    p->adpcm_block = adpcm_block; p->block_pcm = block_pcm; p->channel_block = channel_block;
     p->brstm = tmp;
     p->file_open = 1;
 

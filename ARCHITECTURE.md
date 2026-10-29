@@ -87,8 +87,8 @@ each group, so a change that breaks the rule is visible in review.
 | Group | Fields | Written by | Read by |
 |---|---|---|---|
 | Lock | `cs` | `lock`/`unlock` only | all |
-| File and buffers | `brstm`, `file_open`, `raw`, `pcm`, `chbuf`, `slotbuf` | `player_open`, `player_close`, `player_destroy` (lock held) | decode and render (lock held) |
-| Decode cursor | `cursor`, `carried`, `carried_block`, `block_entering`, `buf_block`, `prev_entering`, `prev_block`, `have_prev` | `decode_block_locked`, `reset_decode_locked`, `rewind_to_locked`, `seek_decode_to_locked`, `render_locked` | same, plus `player_get_state` for `cursor` |
+| File and buffers | `brstm`, `file_open`, `adpcm_block`, `block_pcm`, `channel_block`, `slotbuf` | `player_open`, `player_close`, `player_destroy` (lock held) | decode and render (lock held) |
+| Decode cursor | `cursor`, `next_decoder_state`, `next_block`, `block_start_state`, `decoded_block`, `previous_start_state`, `previous_block`, `have_prev` | `decode_block_locked`, `reset_decode_locked`, `rewind_to_locked`, `seek_decode_to_locked`, `render_locked` | same, plus `player_get_state` for `cursor` |
 | Loop capture | `loop_block`, `loop_entering`, `have_loop_state` | `player_open`, `render_locked`, `seek_decode_to_locked` | `render_locked` |
 | Runtime | `state`, `position`, `wraps`, `last_wrap_position`, `loop_enabled`, `speed_ppm`, `channel_pair`, `audio_error`, `decode_failed`, `finish_pending` | the `player_*` transport functions, `engine_thread`, `finish_check_locked` | `player_get_state` |
 | Device queue | `audio`, `done_event`, `slot_busy[]`, `slot_src[]`, `slot_frames[]` | `reopen_device_locked`, `close_device_locked`, `harvest_slots_locked`, `fill_slots_locked`, `engine_thread` | `any_slot_busy`, `player_get_state` |
