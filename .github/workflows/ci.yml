@@ -1,0 +1,45 @@
+name: CI
+
+# Portable checks only. The full verification harness (tests/run_t2_verification.ps1)
+# needs the local reference collection, vgmstream and an audio device, so it runs
+# on a self-hosted Windows runner instead (see ARCHITECTURE.md, "Continuous
+# integration").
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for whitespace errors
+        shell: bash
+        run: |
+          base="${{ github.event.pull_request.base.sha || github.event.before }}"
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            echo "No comparison base (first push): checking the last commit only."
+            base="HEAD~1"
+          fi
+          git diff --check "$base" HEAD
+
+      - name: Build core tools
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File core\build.ps1
+
+      - name: Build app and player tests
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File app\build.ps1
+
+      - name: Remove build intermediates
+        if: always()
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse -Include *.obj,*.pdb,*.ilk -File -ErrorAction SilentlyContinue | Remove-Item -Force

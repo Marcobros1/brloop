@@ -7,12 +7,19 @@ format and playback contracts in the headers.
 ## Component boundaries
 
 ```text
-app/src/main.c       Win32 window, library actions, transport and selftest
-app/src/player.c     playback state, decode cursor, loop, seek and speed
-app/src/audio_out.c  waveOut device, queued PCM slots and stereo fallback
-core/src/brstm.c     BRSTM/RSTM validation, metadata and block reads
-core/src/dsp_adpcm.c DSP-ADPCM block decoding
+app/src/main.c         Win32 window, transport commands, track validation and ListView
+app/src/library.c      library rows: ownership of paths, names and capacity; selection repair
+app/src/cli_options.c  command-line parsing (no Win32, no Player)
+app/src/ui_selftest.c  scripted window test (--selftest); borrows the window state
+app/src/player.c       playback state, decode cursor, loop, seek and speed
+app/src/audio_out.c    waveOut device, queued PCM slots and stereo fallback
+core/src/brstm.c       BRSTM/RSTM validation, metadata and block reads
+core/src/dsp_adpcm.c   DSP-ADPCM block decoding
 ```
+
+Shared UI vocabulary lives in `app/include/ui_types.h` (control IDs, `TrackRow`,
+`LibraryState`, `Controls`). `ui_selftest.h` and `cli_options.h` define the only
+interfaces those modules expose.
 
 `main.c` must use the public `player.h` API. It must not inspect BRSTM reader
 internals or manipulate decoded samples. The UI library is grouped in one
@@ -85,6 +92,19 @@ FINISHED end reached with looping disabled and queued audio drained
 slots, not merely the furthest decoded position. The UI uses this distinction
 for progress and the `Anterior` rule: more than three seconds into the track
 restarts it; near the beginning selects the previous track.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on `windows-latest` and checks only what needs
+no local data: whitespace (`git diff --check`), a clean build of `core/` and
+`app/` with `/W4 /WX`, and removal of build intermediates.
+
+The full harness `tests/run_t2_verification.ps1` is not portable. It needs the
+reference collection under `%APPDATA%\CT-MKWII`, the vgmstream binary and an
+audio device. Several `player_tests` groups (`th`, `memory`, and the rest that
+open collection files) cannot run without the collection. That harness belongs
+on a self-hosted Windows runner with audio, with the collection path supplied
+as an environment variable. It is not wired yet.
 
 ## Safe refactoring rules
 
