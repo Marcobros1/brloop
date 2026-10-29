@@ -10,7 +10,7 @@ format and playback contracts in the headers.
 app/src/main.c         Win32 window, transport commands, track validation and ListView
 app/src/library.c      library rows: ownership of paths, names and capacity; selection repair
 app/src/transport.c    transport rules as pure functions: play/pause, previous, next, version
-app/src/resampler.c    4-point Catmull-Rom sample-rate converter for fractional speed (not wired yet)
+app/src/resampler.c    4-point Catmull-Rom sample-rate converter; applies every speed other than 1.0x
 app/src/cli_options.c  command-line parsing (no Win32, no Player)
 app/src/ui_selftest.c  scripted window test (--selftest); borrows the window state
 app/src/player.c       playback state, decode cursor, loop, seek and speed
@@ -78,8 +78,10 @@ block.
 A loop jump restores the decoder state captured when entering the loop block.
 The ADPC table is an optional exact anchor: some validated collection files
 contain a zeroed table, so the engine can fall back to carried decoder state.
-The loop is applied to source sample positions, independently of the device
-rate used for Final Lap speed.
+The loop is applied to source sample positions. The device always opens at the
+file's sample rate; speed is applied by the resampler, which reads source frames
+at a fractional step (`playback rate / sample rate`). Changing speed never
+reopens the device.
 
 ## Player state ownership
 
@@ -90,7 +92,7 @@ each group, so a change that breaks the rule is visible in review.
 |---|---|---|---|
 | Lock | `cs` | `lock`/`unlock` only | all |
 | File and buffers | `brstm`, `file_open`, `adpcm_block`, `block_pcm`, `channel_block`, `slotbuf` | `player_open`, `player_close`, `player_destroy` (lock held) | decode and render (lock held) |
-| Decode cursor | `cursor`, `next_decoder_state`, `next_block`, `block_start_state`, `decoded_block`, `previous_start_state`, `previous_block`, `have_prev` | `decode_block_locked`, `reset_decode_locked`, `rewind_to_locked`, `seek_decode_to_locked`, `render_locked` | same, plus `player_get_state` for `cursor` |
+| Decode cursor | `cursor`, `resampler`, `next_decoder_state`, `next_block`, `block_start_state`, `decoded_block`, `previous_start_state`, `previous_block`, `have_prev` | `decode_block_locked`, `reset_decode_locked`, `rewind_to_locked`, `seek_decode_to_locked`, `render_locked` | same, plus `player_get_state` for `cursor` |
 | Loop capture | `loop_block`, `loop_entering`, `have_loop_state` | `player_open`, `render_locked`, `seek_decode_to_locked` | `render_locked` |
 | Runtime | `state`, `position`, `wraps`, `last_wrap_position`, `loop_enabled`, `speed_ppm`, `channel_pair`, `audio_error`, `decode_failed`, `finish_pending` | the `player_*` transport functions, `engine_thread`, `finish_check_locked` | `player_get_state` |
 | Device queue | `audio`, `done_event`, `slot_busy[]`, `slot_src[]`, `slot_frames[]` | `reopen_device_locked`, `close_device_locked`, `harvest_slots_locked`, `fill_slots_locked`, `engine_thread` | `any_slot_busy`, `player_get_state` |
