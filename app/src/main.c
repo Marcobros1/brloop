@@ -218,8 +218,7 @@ static void select_track(int idx)
 
     if (!narrow_path(row->path, narrow, sizeof narrow)) {
         clear_info_panel();
-        set_status(L"La ruta no es representable en la codificación ANSI "
-                   L"del sistema.");
+        set_status(tr(STR_PATH_NOT_ANSI));
         return;
     }
     err[0] = '\0';
@@ -227,7 +226,7 @@ static void select_track(int idx)
         wchar_t werr[512];
         MultiByteToWideChar(CP_ACP, 0, err, -1, werr, 512);
         clear_info_panel();
-        swprintf(msg, 1400, L"No se pudo abrir «%s»: %s", row->name, werr);
+        swprintf(msg, 1400, tr(STR_TRACK_OPEN_FAILED), row->name, werr);
         set_status(msg);
         return;
     }
@@ -245,7 +244,7 @@ static void select_track(int idx)
     g_player_snapshot = s;
     g_last_reported_error = 0;
     g_decode_reported = 0;
-    swprintf(msg, 1400, L"Archivo abierto: %s", row->name);
+    swprintf(msg, 1400, tr(STR_TRACK_OPENED), row->name);
     set_status(msg);
 }
 
@@ -832,16 +831,16 @@ static void update_ui(void)
 
     switch (s.state) {
     case PLAYER_PLAYING:
-        stateText = L"Estado: Reproduciendo";
+        stateText = tr(STR_STATE_PLAYING);
         break;
     case PLAYER_PAUSED:
-        stateText = L"Estado: Pausado";
+        stateText = tr(STR_STATE_PAUSED);
         break;
     case PLAYER_FINISHED:
-        stateText = L"Estado: Terminado";
+        stateText = tr(STR_STATE_FINISHED);
         break;
     default:
-        stateText = L"Estado: Detenido";
+        stateText = tr(STR_STATE_STOPPED);
         break;
     }
     {
@@ -858,13 +857,13 @@ static void update_ui(void)
         TransportLogicalState ls = transport_logical_state(s.state, s.speed_ppm == PLAYER_FLSM_SPEED_PPM,
                                                            s.pair_sel, s.pair_count);
         if (ls.playing)
-            playText = L"Pausar";
+            playText = tr(STR_BUTTON_PAUSE);
         else if (ls.paused)
-            playText = L"Reanudar";
+            playText = tr(STR_BUTTON_RESUME);
         else if (ls.finished)
-            playText = L"Volver a reproducir";
+            playText = tr(STR_BUTTON_REPLAY);
         else
-            playText = L"Reproducir";
+            playText = tr(STR_BUTTON_PLAY);
         GetWindowTextW(g_controls.btnPlay, curPlay, 32);
         if (wcscmp(curPlay, playText) != 0)
             SetWindowTextW(g_controls.btnPlay, playText);
@@ -881,9 +880,9 @@ static void update_ui(void)
         TransportLogicalState speedState = transport_logical_state(s.state,
             s.speed_ppm == PLAYER_FLSM_SPEED_PPM, s.pair_sel, s.pair_count);
         if (speedState.speed_flsm)
-            wcscpy(speedText, L"Final Lap ×1,06812");
+            wcscpy(speedText, tr(STR_SPEED_FLSM));
         else if (s.speed_ppm == PLAYER_SPEED_SCALE)
-            wcscpy(speedText, L"1,0×");
+            wcscpy(speedText, tr(STR_SPEED_NORMAL));
         else {
             format_speed(buf, 40, s.speed_ppm);
             swprintf(speedText, 64, L"%s", buf);
@@ -898,12 +897,12 @@ static void update_ui(void)
         wchar_t pairText[64], cur[64];
         const wchar_t *want;
         if (s.channels == 0) {
-            want = L"—";
+            want = tr(STR_NO_TRACK_VALUE);
         } else if (s.pair_count == 0) {
-            want = L"Estéreo";
+            want = tr(STR_VERSION_STEREO);
         } else {
             int pair = s.pair_sel < 0 ? 0 : s.pair_sel;
-            swprintf(pairText, 64, L"Versión %d · canales %d-%d",
+            swprintf(pairText, 64, tr(STR_VERSION_CAPTION),
                      pair + 1, pair * 2 + 1, pair * 2 + 2);
             want = pairText;
         }
@@ -1001,22 +1000,21 @@ static void on_command(int id)
         TransportPlayAction action = transport_play_action(st);
         if (action == TRANSPORT_PLAY_RESUME) {
             player_play(g_player);
-            set_status(L"Reanudando…");
+            set_status(tr(STR_RESUMING));
         } else if (action == TRANSPORT_PLAY_RESTART) {
             player_seek(g_player, 0);
             if (player_play(g_player) == 0)
-                set_status(L"Reproduciendo desde el inicio…");
+                set_status(tr(STR_PLAYING_FROM_START));
             else
-                set_status(L"No se puede reproducir (sin salida de audio).");
+                set_status(tr(STR_PLAY_NO_AUDIO));
         } else if (action == TRANSPORT_PLAY_PAUSE) {
             player_pause(g_player);
-            set_status(L"Pausado.");
+            set_status(tr(STR_PAUSED));
         } else {
             if (player_play(g_player) == 0)
-                set_status(L"Reproduciendo…");
+                set_status(tr(STR_PLAYING));
             else
-                set_status(L"No se puede reproducir (sin archivo o sin salida "
-                           L"de audio).");
+                set_status(tr(STR_PLAY_NO_FILE));
         }
         break;
     }
@@ -1030,10 +1028,10 @@ static void on_command(int id)
             && prev >= 0 && prev != g_library.selected_index) {
             int wasPlaying = s.state == PLAYER_PLAYING;
             change_track(prev, wasPlaying);
-            set_status(L"Canción anterior.");
+            set_status(tr(STR_PREVIOUS_TRACK));
         } else {
             player_seek(g_player, 0);
-            set_status(L"Volviendo al inicio de la canción.");
+            set_status(tr(STR_BACK_TO_START));
         }
         break;
     }
@@ -1046,7 +1044,7 @@ static void on_command(int id)
         /* Keep playing across the change if the user was listening. */
         wasPlaying = player_get_state(g_player).state == PLAYER_PLAYING;
         change_track(next, wasPlaying);
-        set_status(L"Siguiente canción.");
+        set_status(tr(STR_NEXT_TRACK));
         break;
     }
     case IDC_CHECK_LOOP:

@@ -58,6 +58,7 @@ typedef enum {
     X(STR_LOOP_UNAVAILABLE,     L"No disponible",              L"Not available") \
     X(STR_VALUE_NONE,           L"—",                          L"—") \
     X(STR_VERSION_STEREO,       L"Estéreo",                    L"Stereo") \
+    X(STR_VERSION_CAPTION,      L"Versión %d · canales %d-%d", L"Version %d · channels %d-%d") \
     X(STR_NO_TRACK_VALUE,       L"—",                          L"—") \
     X(STR_TRACK_OPENED,         L"Archivo abierto: %s",        L"File opened: %s") \
     X(STR_TRACK_OPEN_FAILED,    L"No se pudo abrir «%s»: %s",  L"Could not open «%s»: %s") \
