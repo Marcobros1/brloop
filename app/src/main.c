@@ -1,4 +1,4 @@
-/* Metal Kart Wii desktop prototype (T2): Win32 test UI for the BRSTM
+﻿/* Metal Kart Wii desktop prototype (T2): Win32 test UI for the BRSTM
  * playback engine.
  *
  * Layering: this file only handles windows, controls and file listing;
@@ -116,7 +116,7 @@ static void format_speed(wchar_t *out, size_t n, uint32_t ppm)
     swprintf(frac, 16, L"%06u", rem);
     while (len > 2 && frac[len - 1] == L'0')
         len--;
-    swprintf(out, n, L"%u,%.*s×", whole, len, frac);
+    swprintf(out, n, L"%u,%.*sÃ—", whole, len, frac);
 }
 
 /* Status bar text: every user-visible message funnels through here so the
@@ -128,6 +128,8 @@ static void set_status(const wchar_t *text)
 }
 
 /* ---------------------------------------------------------------- rows -- */
+
+static void list_set_loop_cell(int idx, const TrackRow *row);
 
 /* Insert the list columns' values for one library row. Called once per row
  * when added; column order must match create_controls(). */
@@ -147,23 +149,36 @@ static void list_insert_row(int idx, const TrackRow *row)
     ListView_SetItemText(g_controls.list, idx, 2, buf);
     format_time(buf, 64, (double)row->total / row->rate);
     ListView_SetItemText(g_controls.list, idx, 3, buf);
+    list_set_loop_cell(idx, row);
+}
+
+/* Writes the loop column in the current language. Called on insert and again
+ * on every language change, so the column never keeps the old language. */
+static void list_set_loop_cell(int idx, const TrackRow *row)
+{
     /* The list view copies the text and never writes to it, so the const
      * string from the table is safe to pass through its non-const parameter. */
     ListView_SetItemText(g_controls.list, idx, 4,
                          (wchar_t *)(row->loop ? tr(STR_LOOP_YES) : tr(STR_LOOP_NO)));
 }
 
+static void list_refresh_loop_column(void)
+{
+    for (int i = 0; i < g_library.count; i++)
+        list_set_loop_cell(i, &g_library.rows[i]);
+}
+
 /* Info panel with nothing to show: placeholders + loop control disabled, so
  * values from a previous track can never be mistaken for the new state. */
 static void clear_info_panel(void)
 {
-    SetWindowTextW(g_controls.valName, L"—");
+    SetWindowTextW(g_controls.valName, L"â€”");
     SetWindowTextW(g_controls.valPath, L"");
-    SetWindowTextW(g_controls.valRate, L"—");
-    SetWindowTextW(g_controls.valCh, L"—");
-    SetWindowTextW(g_controls.valSamples, L"—");
-    SetWindowTextW(g_controls.valDur, L"—");
-    SetWindowTextW(g_controls.valLoop, L"—");
+    SetWindowTextW(g_controls.valRate, L"â€”");
+    SetWindowTextW(g_controls.valCh, L"â€”");
+    SetWindowTextW(g_controls.valSamples, L"â€”");
+    SetWindowTextW(g_controls.valDur, L"â€”");
+    SetWindowTextW(g_controls.valLoop, L"â€”");
     SetWindowTextW(g_controls.valLoopSt, tr(STR_LOOP_UNAVAILABLE));
     SetWindowTextW(g_controls.valLoopEnd, tr(STR_LOOP_UNAVAILABLE));
     EnableWindow(g_controls.checkLoop, FALSE);
@@ -291,6 +306,10 @@ static int add_track(const wchar_t *path, wchar_t *errbuf, size_t errlen)
     info.loop_start = tmp.info.loop_start;
     brstm_close(&tmp);
 
+    if (library_contains_path(&g_library, path)) {
+        swprintf(errbuf, errlen, tr(STR_TRACK_ALREADY_ADDED), file_name_of(path));
+        return -1;
+    }
     if (library_add(&g_library, path, file_name_of(path), &info) != 0) {
         swprintf(errbuf, errlen, tr(STR_TRACK_NO_MEMORY), file_name_of(path));
         return -1;
@@ -753,20 +772,20 @@ static void create_controls(HWND parent)
                                 IDC_CAP_LOOPEND, 0, 0, 0, 0);
     g_controls.capPath = make_ctl(parent, 0, L"STATIC", tr(STR_CAP_PATH), 0,
                              IDC_CAP_PATH, 0, 0, 0, 0);
-    g_controls.valName = make_ctl(parent, 0, L"STATIC", L"—", 0,
+    g_controls.valName = make_ctl(parent, 0, L"STATIC", L"â€”", 0,
                              IDC_VAL_NAME, 0, 0, 0, 0);
     g_controls.valPath = make_ctl(parent, WS_EX_CLIENTEDGE, L"EDIT", L"",
                              ES_READONLY | ES_AUTOHSCROLL, IDC_VAL_PATH,
                              0, 0, 0, 0);
-    g_controls.valRate = make_ctl(parent, 0, L"STATIC", L"—", 0,
+    g_controls.valRate = make_ctl(parent, 0, L"STATIC", L"â€”", 0,
                              IDC_VAL_RATE, 0, 0, 0, 0);
-    g_controls.valCh = make_ctl(parent, 0, L"STATIC", L"—", 0,
+    g_controls.valCh = make_ctl(parent, 0, L"STATIC", L"â€”", 0,
                            IDC_VAL_CH, 0, 0, 0, 0);
-    g_controls.valSamples = make_ctl(parent, 0, L"STATIC", L"—", 0,
+    g_controls.valSamples = make_ctl(parent, 0, L"STATIC", L"â€”", 0,
                                 IDC_VAL_SAMPLES, 0, 0, 0, 0);
-    g_controls.valDur = make_ctl(parent, 0, L"STATIC", L"—", 0,
+    g_controls.valDur = make_ctl(parent, 0, L"STATIC", L"â€”", 0,
                             IDC_VAL_DUR, 0, 0, 0, 0);
-    g_controls.valLoop = make_ctl(parent, 0, L"STATIC", L"—", 0,
+    g_controls.valLoop = make_ctl(parent, 0, L"STATIC", L"â€”", 0,
                              IDC_VAL_LOOP, 0, 0, 0, 0);
     g_controls.valLoopSt = make_ctl(parent, 0, L"STATIC", tr(STR_LOOP_UNAVAILABLE), 0,
                                IDC_VAL_LOOPST, 0, 0, 0, 0);
@@ -774,7 +793,7 @@ static void create_controls(HWND parent)
                                 IDC_VAL_LOOPEND, 0, 0, 0, 0);
     g_controls.capVer = make_ctl(parent, 0, L"STATIC", tr(STR_CAP_VERSION), 0,
                             IDC_CAP_VER, 0, 0, 0, 0);
-    g_controls.btnPair = make_ctl(parent, 0, L"BUTTON", L"—", 0,
+    g_controls.btnPair = make_ctl(parent, 0, L"BUTTON", L"â€”", 0,
                              IDC_BTN_PAIR, 0, 0, 0, 0);
 
     g_controls.groupPlay = make_ctl(parent, 0, L"BUTTON", tr(STR_PLAY_GROUP),
@@ -805,11 +824,11 @@ static void create_controls(HWND parent)
 
     g_controls.groupSpeed = make_ctl(parent, 0, L"BUTTON", tr(STR_SPEED_GROUP),
                                 BS_GROUPBOX, 0, 0, 0, 0, 0);
-    g_controls.valSpeed = make_ctl(parent, 0, L"STATIC", L"1,00×", SS_RIGHT,
+    g_controls.valSpeed = make_ctl(parent, 0, L"STATIC", L"1,00Ã—", SS_RIGHT,
                               IDC_VAL_SPEED, 0, 0, 0, 0);
-    g_controls.valDevRate = make_ctl(parent, 0, L"STATIC", L"Dispositivo: —",
+    g_controls.valDevRate = make_ctl(parent, 0, L"STATIC", L"Dispositivo: â€”",
                                 SS_RIGHT, IDC_VAL_DEVRATE, 0, 0, 0, 0);
-    g_controls.btnSpeed = make_ctl(parent, 0, L"BUTTON", L"1,0×", 0,
+    g_controls.btnSpeed = make_ctl(parent, 0, L"BUTTON", L"1,0Ã—", 0,
                               IDC_BTN_SPEED, 0, 0, 0, 0);
 
     g_controls.status = CreateWindowExW(0, STATUSCLASSNAMEW, tr(STR_STATUS_READY),
@@ -1171,6 +1190,7 @@ static void relabel_controls(void)
     SetWindowTextW(g_controls.capLoopEnd, tr(STR_CAP_LOOP_END));
     SetWindowTextW(g_controls.capPath, tr(STR_CAP_PATH));
     SetWindowTextW(g_controls.capVer, tr(STR_CAP_VERSION));
+    list_refresh_loop_column();
     SetWindowTextW(g_controls.valLoopSt, tr(STR_LOOP_UNAVAILABLE));
     SetWindowTextW(g_controls.valLoopEnd, tr(STR_LOOP_UNAVAILABLE));
     SetWindowTextW(g_controls.groupPlay, tr(STR_PLAY_GROUP));
@@ -1411,7 +1431,7 @@ static void cli_report_error(void *context, const wchar_t *message)
     if (wcsncmp(message, L"Ruta de --invalid", 18) == 0)
         set_status(message);
     else
-        MessageBoxW(NULL, message, L"Archivo no válido o ilegible",
+        MessageBoxW(NULL, message, L"Archivo no vÃ¡lido o ilegible",
                     MB_OK | MB_ICONWARNING);
 }
 

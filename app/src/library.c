@@ -2,6 +2,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
 
 static wchar_t *duplicate_wide(const wchar_t *text)
 {
@@ -44,6 +45,15 @@ int library_add(LibraryState *library, const wchar_t *path,
     row->loop = info->loop;
     row->loop_start = info->loop_start;
     library->count++;
+    return 0;
+}
+
+int library_contains_path(const LibraryState *library, const wchar_t *path)
+{
+    for (int i = 0; i < library->count; i++) {
+        if (_wcsicmp(library->rows[i].path, path) == 0)
+            return 1;
+    }
     return 0;
 }
 

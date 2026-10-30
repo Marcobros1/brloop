@@ -139,6 +139,17 @@ static void st_phase_library(void)
                  "invalid file rejected with error message");
     }
 
+    /* Adding a track that is already in the library must be refused, and the
+     * list must not grow. The first row is a file known to be valid. */
+    if (*g_test->row_count >= 1 && g_test->library) {
+        wchar_t err[1024];
+        int before = (*g_test->row_count);
+        int rc = g_test->add_track(g_test->add_track_context,
+                                   g_test->library->rows[0].path, err, 1024);
+        st_check(rc != 0 && (*g_test->row_count) == before,
+                 "adding a track already in the library is refused");
+    }
+
     /* Select first track (same handler as a click). */
     ListView_SetItemState((*g_test->controls).list, 0, LVIS_SELECTED | LVIS_FOCUSED,
                           LVIS_SELECTED | LVIS_FOCUSED);
@@ -438,6 +449,20 @@ static void st_phase_language(void)
     GetWindowTextW((*g_test->controls).groupLib, cap, 64);
     st_check(wcscmp(cap, L"Biblioteca") == 0, "menu Español restores the library group");
     st_check(strings_language() == STR_LANG_ES, "Español is the active language");
+    /* The loop column must follow the language too, not keep the old word. */
+    if (*g_test->row_count >= 1 && g_test->library) {
+        wchar_t cell[32] = L"";
+        ListView_GetItemText((*g_test->controls).list, 0, 4, cell, 32);
+        st_check(wcscmp(cell, g_test->library->rows[0].loop ? L"Sí" : L"No") == 0,
+                 "loop column shows Sí after switching to Español");
+        send_cmd(IDM_LANG_EN);
+        pump(50);
+        ListView_GetItemText((*g_test->controls).list, 0, 4, cell, 32);
+        st_check(wcscmp(cell, g_test->library->rows[0].loop ? L"Yes" : L"No") == 0,
+                 "loop column shows Yes after switching back to English");
+        send_cmd(IDM_LANG_ES);
+        pump(50);
+    }
 
     /* Leave the session in the language it started in. */
     if (before == STR_LANG_EN)
