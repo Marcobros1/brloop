@@ -80,4 +80,9 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 Remove-Item -Path $bat -Force
+# The interface font is loaded from assets\fonts next to the executable, so the
+# build output must carry it; otherwise the app falls back to the system font.
+$fontDir = Join-Path $build 'assets\fonts'
+New-Item -ItemType Directory -Force -Path $fontDir | Out-Null
+Copy-Item -Path (Join-Path $root 'assets\fonts\*') -Destination $fontDir -Force
 Write-Host "Built: $build\brstm_player.exe, $build\player_tests.exe"

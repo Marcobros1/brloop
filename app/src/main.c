@@ -39,7 +39,12 @@
  * its own critical section. */
 static HWND g_hwnd;         /* main window; also passed to dialogs */
 static Controls g_controls;      /* every child control handle, filled once */
-static HFONT g_font;        /* shared Segoe UI font for all controls */
+/* The UI font ships with the app (SIL OFL 1.1, see app/assets/fonts/OFL.txt).
+ * It is loaded privately, so it works without being installed on the system. */
+#define UI_FONT_FACE L"Pixelify Sans"
+#define UI_FONT_FILE L"assets\\fonts\\PixelifySans.ttf"
+static HFONT g_font;        /* shared UI font for all controls */
+static int g_font_loaded;
 static HBRUSH g_brushFace;  /* group-box background brush */
 static Player *g_player;    /* engine; created in wWinMain, destroyed in
                              * WM_DESTROY (so every exit path is covered by
@@ -1197,6 +1202,45 @@ static void relabel_controls(void)
     InvalidateRect(g_hwnd, NULL, TRUE);
 }
 
+/* Loads the bundled font from assets\fonts next to the executable. A missing
+ * file is reported in the status bar and the app falls back to the default
+ * GUI font, so the UI still works without the asset. */
+/* Full path of the bundled font: the folder of the executable plus the asset
+ * path. Returns 0 when the path does not fit. */
+static int ui_font_path(wchar_t *out, size_t out_len)
+{
+    wchar_t exe[MAX_PATH];
+    wchar_t *slash;
+    DWORD n = GetModuleFileNameW(NULL, exe, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH)
+        return 0;
+    slash = wcsrchr(exe, L'\\');
+    if (!slash)
+        return 0;
+    *(slash + 1) = L'\0';
+    return swprintf(out, out_len, L"%s%s", exe, UI_FONT_FILE) >= 0;
+}
+
+static void load_ui_font(void)
+{
+    wchar_t path[MAX_PATH];
+    if (!ui_font_path(path, MAX_PATH)) {
+        g_font_loaded = 0;
+        return;
+    }
+    g_font_loaded = AddFontResourceExW(path, FR_PRIVATE, NULL) > 0;
+}
+
+static void unload_ui_font(void)
+{
+    wchar_t path[MAX_PATH];
+    if (!g_font_loaded)
+        return;
+    if (ui_font_path(path, MAX_PATH))
+        RemoveFontResourceExW(path, FR_PRIVATE, NULL);
+    g_font_loaded = 0;
+}
+
 /* Switches the language at runtime: saves the choice, relabels every control,
  * and refreshes the dynamic texts through update_ui(). */
 static void set_language(StrLanguage lang)
@@ -1325,6 +1369,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             DeleteObject(g_font);
             g_font = NULL;
         }
+        unload_ui_font();
         if (g_brushFace) {
             DeleteObject(g_brushFace);
             g_brushFace = NULL;
@@ -1427,10 +1472,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
     if (!RegisterClassExW(&wc))
         return 1;
 
-    g_font = CreateFontW(-12, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+    load_ui_font();
+    g_font = CreateFontW(-16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                          DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
                          CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                         DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+                         DEFAULT_PITCH | FF_DONTCARE, UI_FONT_FACE);
     g_brushFace = CreateSolidBrush(GetSysColor(COLOR_BTNFACE));
 
     {
@@ -1477,6 +1523,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
      * status bar, so the notice about a bad settings file goes after it. */
     if (g_settings_status == SETTINGS_INVALID)
         set_status(tr(STR_SETTINGS_INVALID));
+    if (!g_font_loaded)
+        set_status(tr(STR_FONT_MISSING));
 
     if (g_selftest_mode) {
         UiSelfTestContext test = {0};
@@ -1492,6 +1540,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
         test.add_track = cli_add_track;
         test.add_track_context = NULL;
         test.library = &g_library;
+        test.font_loaded = g_font_loaded;
+        test.ui_font = g_font;
         rc = ui_selftest_run(&test);
         g_selftest_report = NULL;
         LocalFree(argv);

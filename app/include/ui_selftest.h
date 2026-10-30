@@ -33,6 +33,8 @@ typedef struct {
     DWORD baseline_handles;       /* output: first-play handle count */
     SIZE_T baseline_memory;       /* output: first-play working set */
     LibraryState *library;        /* borrowed: removal checks read its rows */
+    int font_loaded;              /* 1 when the bundled UI font was loaded */
+    HFONT ui_font;                /* borrowed: the font the controls use */
 } UiSelfTestContext;
 
 /* Run the real window handlers and return 0 only when every check passes. */

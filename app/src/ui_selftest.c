@@ -524,6 +524,15 @@ static int run_selftest(void)
                 g_test->has_invalid_path ? " + invalid file" : "");
 
     st_check((*g_test->row_count) >= 2, "at least 2 tracks loaded");
+    st_check(g_test->font_loaded, "bundled UI font loaded from assets\\fonts");
+    {
+        LOGFONTW lf;
+        memset(&lf, 0, sizeof lf);
+        st_check(g_test->ui_font != NULL
+                 && GetObjectW(g_test->ui_font, sizeof lf, &lf) == sizeof lf
+                 && wcscmp(lf.lfFaceName, L"Pixelify Sans") == 0,
+                 "controls use the Pixelify Sans face");
+    }
     /* The startup notice about a bad settings file must still be in the status
      * bar before any action replaces it. Checked here, not later, because the
      * first track opened overwrites the bar. Only runs when the environment asks

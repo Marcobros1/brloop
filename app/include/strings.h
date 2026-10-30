@@ -98,7 +98,8 @@ typedef enum {
     X(STR_MENU_ENGLISH,         L"English",                    L"English") \
     X(STR_MENU_SPANISH,         L"Español",                    L"Español") \
     X(STR_SETTINGS_SAVE_FAILED, L"No se pudo guardar el idioma.", L"Could not save the language.") \
-    X(STR_SETTINGS_INVALID,     L"El archivo de configuración no es válido; se usa inglés.", L"The settings file is invalid; using English.")
+    X(STR_SETTINGS_INVALID,     L"El archivo de configuración no es válido; se usa inglés.", L"The settings file is invalid; using English.") \
+    X(STR_FONT_MISSING,         L"No se encontró la fuente de la interfaz; se usa la del sistema.", L"The interface font was not found; using the system font.")
 
 #define STRING_KEY_ENUM(key, es, en) key,
 typedef enum {
