@@ -96,7 +96,9 @@ typedef enum {
     X(STR_WINDOW_TITLE,         L"Metal Kart Wii — Reproductor BRSTM (T2)", L"Metal Kart Wii — BRSTM Player (T2)") \
     X(STR_MENU_LANGUAGE,        L"Idioma",                     L"Language") \
     X(STR_MENU_ENGLISH,         L"English",                    L"English") \
-    X(STR_MENU_SPANISH,         L"Español",                    L"Español")
+    X(STR_MENU_SPANISH,         L"Español",                    L"Español") \
+    X(STR_SETTINGS_SAVE_FAILED, L"No se pudo guardar el idioma.", L"Could not save the language.") \
+    X(STR_SETTINGS_INVALID,     L"El archivo de configuración no es válido; se usa inglés.", L"The settings file is invalid; using English.")
 
 #define STRING_KEY_ENUM(key, es, en) key,
 typedef enum {
