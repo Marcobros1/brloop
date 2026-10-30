@@ -28,6 +28,7 @@
 #include "cli_options.h"
 #include "library.h"
 #include "transport.h"
+#include "strings.h"
 
 /* ------------------------------------------------------------- app state --
  * Win32 pattern: one instance of the whole UI lives in file-scope globals
@@ -678,13 +679,13 @@ static void create_controls(HWND parent)
               | ICC_PROGRESS_CLASS | ICC_STANDARD_CLASSES;
     InitCommonControlsEx(&icc);
 
-    g_controls.groupLib = make_ctl(parent, 0, L"BUTTON", L"Biblioteca",
+    g_controls.groupLib = make_ctl(parent, 0, L"BUTTON", tr(STR_LIBRARY_GROUP),
                               BS_GROUPBOX, 0, 0, 0, 0, 0);
-    g_controls.btnOpen = make_ctl(parent, 0, L"BUTTON", L"Abrir…",
+    g_controls.btnOpen = make_ctl(parent, 0, L"BUTTON", tr(STR_BUTTON_OPEN),
                              0, IDC_BTN_OPEN, 0, 0, 0, 0);
-    g_controls.btnRemove = make_ctl(parent, 0, L"BUTTON", L"Quitar",
+    g_controls.btnRemove = make_ctl(parent, 0, L"BUTTON", tr(STR_BUTTON_REMOVE),
                                0, IDC_BTN_REMOVE, 0, 0, 0, 0);
-    g_controls.btnClear = make_ctl(parent, 0, L"BUTTON", L"Limpiar",
+    g_controls.btnClear = make_ctl(parent, 0, L"BUTTON", tr(STR_BUTTON_CLEAR),
                               0, IDC_BTN_CLEAR, 0, 0, 0, 0);
     g_controls.list = make_ctl(parent, WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
                           LVS_REPORT | LVS_SHOWSELALWAYS, IDC_LIST,
@@ -708,25 +709,25 @@ static void create_controls(HWND parent)
     }
 
     g_controls.groupInfo = make_ctl(parent, 0, L"BUTTON",
-                               L"Información del archivo", BS_GROUPBOX,
+                               tr(STR_FILE_INFO_GROUP), BS_GROUPBOX,
                                0, 0, 0, 0, 0);
-    g_controls.capName = make_ctl(parent, 0, L"STATIC", L"Nombre:", 0,
+    g_controls.capName = make_ctl(parent, 0, L"STATIC", tr(STR_CAP_NAME), 0,
                              IDC_CAP_NAME, 0, 0, 0, 0);
-    g_controls.capCh = make_ctl(parent, 0, L"STATIC", L"Canales:", 0,
+    g_controls.capCh = make_ctl(parent, 0, L"STATIC", tr(STR_CAP_CHANNELS), 0,
                            IDC_CAP_CH, 0, 0, 0, 0);
-    g_controls.capRate = make_ctl(parent, 0, L"STATIC", L"Frecuencia:", 0,
+    g_controls.capRate = make_ctl(parent, 0, L"STATIC", tr(STR_CAP_RATE), 0,
                              IDC_CAP_RATE, 0, 0, 0, 0);
-    g_controls.capDur = make_ctl(parent, 0, L"STATIC", L"Duración:", 0,
+    g_controls.capDur = make_ctl(parent, 0, L"STATIC", tr(STR_CAP_DURATION), 0,
                             IDC_CAP_DUR, 0, 0, 0, 0);
-    g_controls.capSamples = make_ctl(parent, 0, L"STATIC", L"Muestras:", 0,
+    g_controls.capSamples = make_ctl(parent, 0, L"STATIC", tr(STR_CAP_SAMPLES), 0,
                                 IDC_CAP_SAMPLES, 0, 0, 0, 0);
-    g_controls.capLoop = make_ctl(parent, 0, L"STATIC", L"Loop:", 0,
+    g_controls.capLoop = make_ctl(parent, 0, L"STATIC", tr(STR_CAP_LOOP), 0,
                              IDC_CAP_LOOP, 0, 0, 0, 0);
-    g_controls.capLoopSt = make_ctl(parent, 0, L"STATIC", L"Inicio de loop:", 0,
+    g_controls.capLoopSt = make_ctl(parent, 0, L"STATIC", tr(STR_CAP_LOOP_START), 0,
                                IDC_CAP_LOOPST, 0, 0, 0, 0);
-    g_controls.capLoopEnd = make_ctl(parent, 0, L"STATIC", L"Fin de loop:", 0,
+    g_controls.capLoopEnd = make_ctl(parent, 0, L"STATIC", tr(STR_CAP_LOOP_END), 0,
                                 IDC_CAP_LOOPEND, 0, 0, 0, 0);
-    g_controls.capPath = make_ctl(parent, 0, L"STATIC", L"Ruta:", 0,
+    g_controls.capPath = make_ctl(parent, 0, L"STATIC", tr(STR_CAP_PATH), 0,
                              IDC_CAP_PATH, 0, 0, 0, 0);
     g_controls.valName = make_ctl(parent, 0, L"STATIC", L"—", 0,
                              IDC_VAL_NAME, 0, 0, 0, 0);
@@ -747,22 +748,22 @@ static void create_controls(HWND parent)
                                IDC_VAL_LOOPST, 0, 0, 0, 0);
     g_controls.valLoopEnd = make_ctl(parent, 0, L"STATIC", L"No disponible", 0,
                                 IDC_VAL_LOOPEND, 0, 0, 0, 0);
-    g_controls.capVer = make_ctl(parent, 0, L"STATIC", L"Versión:", 0,
+    g_controls.capVer = make_ctl(parent, 0, L"STATIC", tr(STR_CAP_VERSION), 0,
                             IDC_CAP_VER, 0, 0, 0, 0);
     g_controls.btnPair = make_ctl(parent, 0, L"BUTTON", L"—", 0,
                              IDC_BTN_PAIR, 0, 0, 0, 0);
 
-    g_controls.groupPlay = make_ctl(parent, 0, L"BUTTON", L"Reproducción",
+    g_controls.groupPlay = make_ctl(parent, 0, L"BUTTON", tr(STR_PLAY_GROUP),
                                BS_GROUPBOX, 0, 0, 0, 0, 0);
     /* Transport like an MP3 player: play doubles as pause (its caption says
      * what the next click does), "Anterior" goes back (or restarts a song
      * that is more than 3 s in), "Siguiente" moves on to the next library
      * row. There is deliberately no separate stop button. */
-    g_controls.btnPlay = make_ctl(parent, 0, L"BUTTON", L"Reproducir",
+    g_controls.btnPlay = make_ctl(parent, 0, L"BUTTON", tr(STR_BUTTON_PLAY),
                              0, IDC_BTN_PLAY, 0, 0, 0, 0);
-    g_controls.btnPrevious = make_ctl(parent, 0, L"BUTTON", L"Anterior",
+    g_controls.btnPrevious = make_ctl(parent, 0, L"BUTTON", tr(STR_BUTTON_PREVIOUS),
                              0, IDC_BTN_PREVIOUS, 0, 0, 0, 0);
-    g_controls.btnNext = make_ctl(parent, 0, L"BUTTON", L"Siguiente",
+    g_controls.btnNext = make_ctl(parent, 0, L"BUTTON", tr(STR_BUTTON_NEXT),
                              0, IDC_BTN_NEXT, 0, 0, 0, 0);
     g_controls.progress = make_ctl(parent, 0, PROGRESS_CLASS_NAME, L"",
                               0, IDC_PROGRESS, 0, 0, 0, 0);
@@ -770,11 +771,11 @@ static void create_controls(HWND parent)
                               SS_RIGHT, IDC_VAL_STATE, 0, 0, 0, 0);
     g_controls.valTime = make_ctl(parent, 0, L"STATIC", L"0:00.000 / 0:00.000",
                              0, IDC_VAL_TIME, 0, 0, 0, 0);
-    g_controls.checkLoop = make_ctl(parent, 0, L"BUTTON", L"Repetir loop",
+    g_controls.checkLoop = make_ctl(parent, 0, L"BUTTON", tr(STR_CHECK_LOOP),
                                BS_AUTOCHECKBOX | BS_LEFT, IDC_CHECK_LOOP,
                                0, 0, 0, 0);
 
-    g_controls.groupSpeed = make_ctl(parent, 0, L"BUTTON", L"Velocidad",
+    g_controls.groupSpeed = make_ctl(parent, 0, L"BUTTON", tr(STR_SPEED_GROUP),
                                 BS_GROUPBOX, 0, 0, 0, 0, 0);
     g_controls.valSpeed = make_ctl(parent, 0, L"STATIC", L"1,00×", SS_RIGHT,
                               IDC_VAL_SPEED, 0, 0, 0, 0);
@@ -783,7 +784,7 @@ static void create_controls(HWND parent)
     g_controls.btnSpeed = make_ctl(parent, 0, L"BUTTON", L"1,0×", 0,
                               IDC_BTN_SPEED, 0, 0, 0, 0);
 
-    g_controls.status = CreateWindowExW(0, STATUSCLASSNAMEW, L"Listo.",
+    g_controls.status = CreateWindowExW(0, STATUSCLASSNAMEW, tr(STR_STATUS_READY),
                                    WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
                                    0, 0, 0, 0, parent,
                                    (HMENU)(INT_PTR)2, GetModuleHandleW(NULL),
