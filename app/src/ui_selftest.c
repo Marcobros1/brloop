@@ -8,6 +8,7 @@
 
 #include "ui_selftest.h"
 #include "transport.h"
+#include "strings.h"
 
 /* The hidden window owns the state passed in UiSelfTestContext. This private
  * pointer avoids threading a large context through every phase helper. */
@@ -402,6 +403,47 @@ static void st_phase_pair(void)
     }
 }
 
+/* Phase 4b - language: choosing English from the menu relabels the window
+ * and the state text follows, then Español restores the original labels.
+ * The labels are read back from the controls themselves, so a missed control
+ * shows up as a failure rather than going unnoticed. */
+static void st_phase_language(void)
+{
+    wchar_t cap[64] = L"";
+    StrLanguage before = strings_language();
+
+    send_cmd(IDM_LANG_EN);
+    pump(100);
+    {
+        PlayerSnapshot s = player_get_state(g_test->player);
+        const wchar_t *expected = s.state == PLAYER_PLAYING ? L"Pause"
+                                : s.state == PLAYER_PAUSED ? L"Resume"
+                                : s.state == PLAYER_FINISHED ? L"Play again"
+                                : L"Play";
+        GetWindowTextW((*g_test->controls).btnPlay, cap, 64);
+        st_check(wcscmp(cap, expected) == 0,
+                 "menu English relabels the play button for the current state");
+    }
+    GetWindowTextW((*g_test->controls).btnPrevious, cap, 64);
+    st_check(wcscmp(cap, L"Previous") == 0, "menu English relabels Previous");
+    GetWindowTextW((*g_test->controls).groupLib, cap, 64);
+    st_check(wcscmp(cap, L"Library") == 0, "menu English relabels the library group");
+    st_check(strings_language() == STR_LANG_EN, "English is the active language");
+
+    send_cmd(IDM_LANG_ES);
+    pump(100);
+    GetWindowTextW((*g_test->controls).btnPrevious, cap, 64);
+    st_check(wcscmp(cap, L"Anterior") == 0, "menu Español restores Previous");
+    GetWindowTextW((*g_test->controls).groupLib, cap, 64);
+    st_check(wcscmp(cap, L"Biblioteca") == 0, "menu Español restores the library group");
+    st_check(strings_language() == STR_LANG_ES, "Español is the active language");
+
+    /* Leave the session in the language it started in. */
+    if (before == STR_LANG_EN)
+        send_cmd(IDM_LANG_EN);
+    pump(50);
+}
+
 /* Phase 5 - removal: removing the selected row must select the replacement
  * exactly once and reopen it; removing the last row must clear the selection
  * and close the player. Both use the same WM_COMMAND as the Quitar button. */
@@ -488,6 +530,7 @@ static int run_selftest(void)
     st_phase_seek_speed();
     st_log_handles("after seek/speed");
     st_phase_pair();
+    st_phase_language();
     st_log_handles("after pair");
     st_phase_remove();
     st_log_handles("after remove");

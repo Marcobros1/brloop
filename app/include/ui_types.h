@@ -41,6 +41,8 @@
 #define IDC_CAP_LOOPST    1036
 #define IDC_CAP_PATH      1037
 #define IDC_CAP_VER       1038
+#define IDM_LANG_EN       1050
+#define IDM_LANG_ES       1051
 
 #define TIMER_UI 1
 #define UI_TICK_MS 100

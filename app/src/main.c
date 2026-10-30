@@ -29,6 +29,7 @@
 #include "library.h"
 #include "transport.h"
 #include "strings.h"
+#include "settings.h"
 
 /* ------------------------------------------------------------- app state --
  * Win32 pattern: one instance of the whole UI lives in file-scope globals
@@ -436,6 +437,7 @@ static HBRUSH   g_brushProgLoop;   /* loop region */
 static HBRUSH   g_brushProgMarker; /* loop start line */
 
 static void update_ui(void);
+static void set_language(StrLanguage lang);
 
 /* Seek: click (or drag end) on the bar jumps to that source position. */
 static int g_progress_dragging;
@@ -999,6 +1001,12 @@ static void on_command(int id)
     case IDC_BTN_OPEN:
         browse_files();
         break;
+    case IDM_LANG_EN:
+        set_language(STR_LANG_EN);
+        break;
+    case IDM_LANG_ES:
+        set_language(STR_LANG_ES);
+        break;
     case IDC_BTN_REMOVE:
         if (g_library.selected_index >= 0)
             remove_track(g_library.selected_index);
@@ -1096,6 +1104,108 @@ static void on_command(int id)
 
 /* --------------------------------------------------------- window proc -- */
 
+/* Reads the saved language before any control is created, so the window
+ * opens already in the right language. An unreadable or unsupported file is
+ * reported in the status bar once the controls exist (see apply_language). */
+static SettingsStatus g_settings_status = SETTINGS_OK;
+
+static void load_saved_language(void)
+{
+    StrLanguage lang = STR_LANG_EN;
+    g_settings_status = settings_load_language(&lang);
+    strings_set_language(lang);
+}
+
+/* Menu: Language with English and Español. The checkmark follows the language
+ * in force, so the menu itself shows which one is active. */
+static HMENU build_menu(void)
+{
+    HMENU bar = CreateMenu();
+    HMENU lang = CreatePopupMenu();
+    AppendMenuW(lang, MF_STRING, IDM_LANG_EN, tr(STR_MENU_ENGLISH));
+    AppendMenuW(lang, MF_STRING, IDM_LANG_ES, tr(STR_MENU_SPANISH));
+    AppendMenuW(bar, MF_POPUP, (UINT_PTR)lang, tr(STR_MENU_LANGUAGE));
+    CheckMenuRadioItem(lang, IDM_LANG_EN, IDM_LANG_ES,
+                       strings_language() == STR_LANG_ES ? IDM_LANG_ES : IDM_LANG_EN,
+                       MF_BYCOMMAND);
+    return bar;
+}
+
+/* Writes the static caption of every control that create_controls() labels
+ * with tr(). Controls whose text update_ui() owns (state, speed, version,
+ * device, time) are not touched here: update_ui() rewrites them on the next
+ * tick, and the cache it keeps is cleared below so that rewrite happens. */
+static void relabel_controls(void)
+{
+    SetWindowTextW(g_controls.groupLib, tr(STR_LIBRARY_GROUP));
+    SetWindowTextW(g_controls.btnOpen, tr(STR_BUTTON_OPEN));
+    SetWindowTextW(g_controls.btnRemove, tr(STR_BUTTON_REMOVE));
+    SetWindowTextW(g_controls.btnClear, tr(STR_BUTTON_CLEAR));
+    SetWindowTextW(g_controls.groupInfo, tr(STR_FILE_INFO_GROUP));
+    SetWindowTextW(g_controls.capName, tr(STR_CAP_NAME));
+    SetWindowTextW(g_controls.capCh, tr(STR_CAP_CHANNELS));
+    SetWindowTextW(g_controls.capRate, tr(STR_CAP_RATE));
+    SetWindowTextW(g_controls.capDur, tr(STR_CAP_DURATION));
+    SetWindowTextW(g_controls.capSamples, tr(STR_CAP_SAMPLES));
+    SetWindowTextW(g_controls.capLoop, tr(STR_CAP_LOOP));
+    SetWindowTextW(g_controls.capLoopSt, tr(STR_CAP_LOOP_START));
+    SetWindowTextW(g_controls.capLoopEnd, tr(STR_CAP_LOOP_END));
+    SetWindowTextW(g_controls.capPath, tr(STR_CAP_PATH));
+    SetWindowTextW(g_controls.capVer, tr(STR_CAP_VERSION));
+    SetWindowTextW(g_controls.valLoopSt, tr(STR_LOOP_UNAVAILABLE));
+    SetWindowTextW(g_controls.valLoopEnd, tr(STR_LOOP_UNAVAILABLE));
+    SetWindowTextW(g_controls.groupPlay, tr(STR_PLAY_GROUP));
+    SetWindowTextW(g_controls.btnPrevious, tr(STR_BUTTON_PREVIOUS));
+    SetWindowTextW(g_controls.btnNext, tr(STR_BUTTON_NEXT));
+    SetWindowTextW(g_controls.checkLoop, tr(STR_CHECK_LOOP));
+    SetWindowTextW(g_controls.groupSpeed, tr(STR_SPEED_GROUP));
+    {
+        LVCOLUMNW col;
+        int i;
+        const wchar_t *names[5] = { tr(STR_COL_NAME), tr(STR_COL_RATE), tr(STR_COL_CHANNELS),
+                                    tr(STR_COL_DURATION), tr(STR_COL_LOOP) };
+        memset(&col, 0, sizeof col);
+        col.mask = LVCF_TEXT;
+        for (i = 0; i < 5; i++) {
+            col.pszText = (wchar_t *)names[i];
+            ListView_SetColumn(g_controls.list, i, &col);
+        }
+    }
+    /* Force a rewrite of the texts update_ui() owns, instead of waiting for a
+     * change that may never come (the cache there compares against the last
+     * value written, which is now in the old language). */
+    SetWindowTextW(g_controls.valState, L"");
+    SetWindowTextW(g_controls.btnPlay, L"");
+    SetWindowTextW(g_controls.btnPair, L"");
+    SetWindowTextW(g_controls.btnSpeed, L"");
+    SetWindowTextW(g_controls.valDevRate, L"");
+    InvalidateRect(g_hwnd, NULL, TRUE);
+}
+
+/* Switches the language at runtime: saves the choice, relabels every control
+ * and the menu, and refreshes the dynamic texts through update_ui(). */
+static void set_language(StrLanguage lang)
+{
+    HMENU bar = GetMenu(g_hwnd);
+    if (strings_language() == lang && g_settings_status == SETTINGS_OK)
+        return;
+    strings_set_language(lang);
+    /* A scripted self-test changes the language only for its own session;
+     * it must never overwrite the user's saved preference. */
+    if (!g_selftest_mode && settings_save_language(lang) != 0)
+        set_status(tr(STR_SETTINGS_SAVE_FAILED));
+    relabel_controls();
+    if (bar) {
+        HMENU lang_menu = GetSubMenu(bar, 0);
+        if (lang_menu)
+            CheckMenuRadioItem(lang_menu, IDM_LANG_EN, IDM_LANG_ES,
+                               lang == STR_LANG_ES ? IDM_LANG_ES : IDM_LANG_EN,
+                               MF_BYCOMMAND);
+    }
+    DrawMenuBar(g_hwnd);
+    update_ui();
+}
+
 /* Main window procedure. WM_CREATE builds controls + timer; WM_NOTIFY turns
  * list selection into select_track(); WM_COMMAND routes buttons; the color
  * messages tint the state label by playback state; WM_DESTROY tears down
@@ -1105,8 +1215,12 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     switch (msg) {
     case WM_CREATE:
         g_hwnd = hwnd;
+        load_saved_language();
+        SetMenu(hwnd, build_menu());
         create_controls(hwnd);
         SetTimer(hwnd, TIMER_UI, UI_TICK_MS, NULL);
+        if (g_settings_status == SETTINGS_INVALID)
+            set_status(tr(STR_SETTINGS_INVALID));
         return 0;
 
     case WM_SIZE:
