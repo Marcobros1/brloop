@@ -854,11 +854,13 @@ static void update_ui(void)
     {
         const wchar_t *playText;
         wchar_t curPlay[32];
-        if (s.state == PLAYER_PLAYING)
+        TransportLogicalState ls = transport_logical_state(s.state, s.speed_ppm == PLAYER_FLSM_SPEED_PPM,
+                                                           s.pair_sel, s.pair_count);
+        if (ls.playing)
             playText = L"Pausar";
-        else if (s.state == PLAYER_PAUSED)
+        else if (ls.paused)
             playText = L"Reanudar";
-        else if (s.state == PLAYER_FINISHED)
+        else if (ls.finished)
             playText = L"Volver a reproducir";
         else
             playText = L"Reproducir";
@@ -875,7 +877,9 @@ static void update_ui(void)
     /* Speed button: caption is the mode in force (like the version button). */
     {
         wchar_t speedText[64], cur[64];
-        if (s.speed_ppm == PLAYER_FLSM_SPEED_PPM)
+        TransportLogicalState speedState = transport_logical_state(s.state,
+            s.speed_ppm == PLAYER_FLSM_SPEED_PPM, s.pair_sel, s.pair_count);
+        if (speedState.speed_flsm)
             wcscpy(speedText, L"Final Lap ×1,06812");
         else if (s.speed_ppm == PLAYER_SPEED_SCALE)
             wcscpy(speedText, L"1,0×");

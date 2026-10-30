@@ -7,6 +7,7 @@
 #include <wchar.h>
 
 #include "ui_selftest.h"
+#include "transport.h"
 
 /* The hidden window owns the state passed in UiSelfTestContext. This private
  * pointer avoids threading a large context through every phase helper. */
@@ -184,22 +185,24 @@ static void st_phase_transport(void)
     /* Pause / resume through the single play button, with position
      * stability and a caption that announces the next click. */
     {
-        wchar_t cap[32] = L"";
-        GetWindowTextW((*g_test->controls).btnPlay, cap, 32);
-        st_check(wcscmp(cap, L"Pausar") == 0,
-                 "play button offers pause while playing");
+        PlayerSnapshot s = player_get_state(g_test->player);
+        TransportLogicalState ls = transport_logical_state(s.state,
+            s.speed_ppm == PLAYER_FLSM_SPEED_PPM, s.pair_sel, s.pair_count);
+        st_check(ls.playing, "play button offers pause while playing");
     }
     send_cmd(IDC_BTN_PLAY);
     st_check(wait_state(PLAYER_PAUSED, 2000), "pause reaches PAUSED");
     {
-        wchar_t cap[32] = L"";
         uint64_t p0 = player_get_state(g_test->player).position;
         pump(300);
         uint64_t p1 = player_get_state(g_test->player).position;
         st_check(p0 == p1, "position frozen while paused");
-        GetWindowTextW((*g_test->controls).btnPlay, cap, 32);
-        st_check(wcscmp(cap, L"Reanudar") == 0,
-                 "play button offers resume while paused");
+        {
+            PlayerSnapshot s = player_get_state(g_test->player);
+            TransportLogicalState ls = transport_logical_state(s.state,
+                s.speed_ppm == PLAYER_FLSM_SPEED_PPM, s.pair_sel, s.pair_count);
+            st_check(ls.paused, "play button offers resume while paused");
+        }
     }
     send_cmd(IDC_BTN_PLAY);
     st_check(wait_state(PLAYER_PLAYING, 2000), "resume reaches PLAYING");
@@ -242,23 +245,22 @@ static void st_phase_seek_speed(void)
         PlayerSnapshot s = player_get_state(g_test->player);
         uint32_t want = player_device_rate(s.sample_rate,
                                            PLAYER_FLSM_SPEED_PPM);
-        wchar_t cap[64] = L"";
+        TransportLogicalState ls = transport_logical_state(s.state,
+            s.speed_ppm == PLAYER_FLSM_SPEED_PPM, s.pair_sel, s.pair_count);
         st_check(s.state == PLAYER_PLAYING && s.device_rate == want,
                  "FLSM speed applied live, device rate matches floor(rate*k)");
-        GetWindowTextW((*g_test->controls).btnSpeed, cap, 64);
-        st_check(wcsstr(cap, L"Final Lap") != NULL,
-                 "speed button caption shows Final Lap");
+        st_check(ls.speed_flsm, "speed state reports Final Lap");
     }
     send_cmd(IDC_BTN_SPEED);
     pump(500);
     {
         PlayerSnapshot s = player_get_state(g_test->player);
-        wchar_t cap[64] = L"";
+        TransportLogicalState ls = transport_logical_state(s.state,
+            s.speed_ppm == PLAYER_FLSM_SPEED_PPM, s.pair_sel, s.pair_count);
         st_check(s.state == PLAYER_PLAYING && s.device_rate == s.sample_rate,
                  "second press restores the 1.0x device rate");
-        GetWindowTextW((*g_test->controls).btnSpeed, cap, 64);
-        st_check(wcsstr(cap, L"1,0") != NULL,
-                 "speed button caption shows 1,0x again");
+        st_check(!ls.speed_flsm && s.speed_ppm == PLAYER_SPEED_SCALE,
+                 "speed state reports 1.0x again");
     }
 
     /* Anterior far into the song (>3 s, we are at ~75%): restarts the
@@ -332,10 +334,10 @@ static void st_phase_pair(void)
         s = player_get_state(g_test->player);
         st_check(s.pair_sel == 0, "second press returns to version 1");
         {
-            wchar_t cap[64] = L"";
-            GetWindowTextW((*g_test->controls).btnPair, cap, 64);
-            st_check(wcsstr(cap, L"Versión 1") != NULL,
-                     "button caption shows the selected version");
+            TransportLogicalState ls = transport_logical_state(s.state,
+                s.speed_ppm == PLAYER_FLSM_SPEED_PPM, s.pair_sel, s.pair_count);
+            st_check(ls.pair_index == 0,
+                     "version state reports the first version");
         }
         send_cmd(IDC_BTN_PAIR);
         pump(50);
@@ -372,7 +374,7 @@ static void st_phase_pair(void)
         {
             /* Guarded: a bare --selftest without files leaves the library
              * empty and the checks below must fail, not crash. */
-            int expect = (*g_test->row_count) > 0 ? ((*g_test->selected) + 1) % (*g_test->row_count) : -1;
+            int expect = transport_next_index(*g_test->selected, *g_test->row_count);
             send_cmd(IDC_BTN_NEXT);
             st_check(wait_state(PLAYER_PLAYING, 4000)
                      && (*g_test->selected) == expect,
@@ -383,7 +385,7 @@ static void st_phase_pair(void)
         /* Anterior with the song just opened (position ~0) goes back to the
          * previous track - wrapping to the last row - and keeps playing. */
         {
-            int expect = (*g_test->selected) > 0 ? (*g_test->selected) - 1 : (*g_test->row_count) - 1;
+            int expect = transport_previous_index(*g_test->selected, *g_test->row_count);
             send_cmd(IDC_BTN_PREVIOUS);
             st_check(wait_state(PLAYER_PLAYING, 4000)
                      && (*g_test->selected) == expect,

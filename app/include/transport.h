@@ -39,6 +39,20 @@ int transport_previous_index(int selected, int count);
  * or nothing is selected. Wraps from the last row to the first one. */
 int transport_next_index(int selected, int count);
 
+/* Logical state of the transport controls, without any text. The UI turns it
+ * into captions in the active language; the self-test compares it directly,
+ * so a language change never changes what the test checks. */
+typedef struct {
+    int playing;      /* 1 while the engine is playing */
+    int paused;       /* 1 while the engine is paused */
+    int finished;     /* 1 when the song reached its end */
+    int speed_flsm;   /* 1 when the Final Lap speed is in force */
+    int pair_index;   /* 0-based version shown, or -1 when there is none */
+} TransportLogicalState;
+
+TransportLogicalState transport_logical_state(PlayerState state, int speed_is_flsm,
+                                              int32_t pair_sel, uint32_t pair_count);
+
 /* Version (channel pair) that the version button selects next, or -1 when
  * the file has no pairs. Cycles through the real versions only: the engine's
  * mix-all value is never offered. */
