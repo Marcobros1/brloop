@@ -2,6 +2,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
 
 /* Formats the mapper has already rejected. A FAILED waveOutOpen leaves about
  * three handles behind inside winmm on this machine (measured in isolation:
@@ -193,6 +194,10 @@ MMRESULT audio_write(AudioOut *a, uint32_t slot, const int16_t *pcm,
         memcpy(a->data[slot], pcm, (size_t)frames * a->frame_bytes);
     }
     h->dwBufferLength = frames * a->frame_bytes;
+    /* Automated runs keep the whole device path but send silence, so a test
+     * run never makes sound. Normal use never sets MKW_SILENT_AUDIO. */
+    if (_wgetenv(L"MKW_SILENT_AUDIO") != NULL)
+        memset(a->data[slot], 0, (size_t)frames * a->frame_bytes);
 
     if (!(h->dwFlags & WHDR_PREPARED)) {
         MMRESULT r = waveOutPrepareHeader(a->handle, h, sizeof *h);

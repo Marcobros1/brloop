@@ -14,6 +14,7 @@
 #define IDC_BTN_PLAY      1005
 #define IDC_BTN_PREVIOUS  1006
 #define IDC_BTN_NEXT      1007
+#define IDC_BTN_LANG      1009
 #define IDC_CHECK_LOOP    1008
 #define IDC_BTN_SPEED     1010
 #define IDC_BTN_PAIR      1012
@@ -76,7 +77,7 @@ typedef struct {
     HWND list, status;
     HWND groupLib, groupInfo, groupPlay, groupSpeed;
     HWND btnOpen, btnRemove, btnClear;
-    HWND btnPlay, btnPrevious, btnNext;
+    HWND btnPlay, btnPrevious, btnNext, btnLang;
     HWND btnSpeed, btnPair;
     HWND checkLoop, progress;
     HWND capName, capCh, capRate, capDur, capSamples, capLoop, capLoopSt;

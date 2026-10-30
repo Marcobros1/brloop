@@ -30,6 +30,7 @@
 #include "transport.h"
 #include "strings.h"
 #include "settings.h"
+#include "icons.h"
 
 /* ------------------------------------------------------------- app state --
  * Win32 pattern: one instance of the whole UI lives in file-scope globals
@@ -438,6 +439,7 @@ static HBRUSH   g_brushProgMarker; /* loop start line */
 
 static void update_ui(void);
 static void set_language(StrLanguage lang);
+static void show_language_menu(HWND owner);
 
 /* Seek: click (or drag end) on the bar jumps to that source position. */
 static int g_progress_dragging;
@@ -646,9 +648,10 @@ static void layout(void)
      * previous-track and next-track beside it. */
     y = m + infoH + g;
     move_ctl(g_controls.groupPlay, rightX, y, rightW, playH);
-    move_ctl(g_controls.btnPlay, rightX + 12, y + 22, 104, 28);
-    move_ctl(g_controls.btnPrevious, rightX + 124, y + 22, 84, 28);
-    move_ctl(g_controls.btnNext, rightX + 216, y + 22, 96, 28);
+    move_ctl(g_controls.btnPrevious, rightX + 12, y + 22, 84, 28);
+    move_ctl(g_controls.btnPlay, rightX + 108, y + 22, 104, 28);
+    move_ctl(g_controls.btnNext, rightX + 224, y + 22, 96, 28);
+    move_ctl(g_controls.btnLang, rightX + rightW - 12 - 40, y + 22, 40, 28);
     move_ctl(g_controls.progress, rightX + 12, y + 58, rightW - 24 - 176, 16);
     move_ctl(g_controls.valState, rightX + rightW - 12 - 164, y + 56, 164, 20);
     move_ctl(g_controls.valTime, rightX + 12, y + 80, 170, 18);
@@ -775,12 +778,16 @@ static void create_controls(HWND parent)
      * what the next click does), "Anterior" goes back (or restarts a song
      * that is more than 3 s in), "Siguiente" moves on to the next library
      * row. There is deliberately no separate stop button. */
-    g_controls.btnPlay = make_ctl(parent, 0, L"BUTTON", tr(STR_BUTTON_PLAY),
-                             0, IDC_BTN_PLAY, 0, 0, 0, 0);
+    /* Owner-drawn: the glyph comes from icons.c and the caption stays as the
+     * accessible name, so screen readers and the tooltip still get the word. */
     g_controls.btnPrevious = make_ctl(parent, 0, L"BUTTON", tr(STR_BUTTON_PREVIOUS),
-                             0, IDC_BTN_PREVIOUS, 0, 0, 0, 0);
+                             BS_OWNERDRAW, IDC_BTN_PREVIOUS, 0, 0, 0, 0);
+    g_controls.btnPlay = make_ctl(parent, 0, L"BUTTON", tr(STR_BUTTON_PLAY),
+                             BS_OWNERDRAW, IDC_BTN_PLAY, 0, 0, 0, 0);
     g_controls.btnNext = make_ctl(parent, 0, L"BUTTON", tr(STR_BUTTON_NEXT),
-                             0, IDC_BTN_NEXT, 0, 0, 0, 0);
+                             BS_OWNERDRAW, IDC_BTN_NEXT, 0, 0, 0, 0);
+    g_controls.btnLang = make_ctl(parent, 0, L"BUTTON", tr(STR_MENU_LANGUAGE),
+                             BS_OWNERDRAW, IDC_BTN_LANG, 0, 0, 0, 0);
     g_controls.progress = make_ctl(parent, 0, PROGRESS_CLASS_NAME, L"",
                               0, IDC_PROGRESS, 0, 0, 0, 0);
     g_controls.valState = make_ctl(parent, 0, L"STATIC", L"Estado: Detenido",
@@ -1001,6 +1008,9 @@ static void on_command(int id)
     case IDC_BTN_OPEN:
         browse_files();
         break;
+    case IDC_BTN_LANG:
+        show_language_menu(g_hwnd);
+        break;
     case IDM_LANG_EN:
         set_language(STR_LANG_EN);
         break;
@@ -1116,19 +1126,23 @@ static void load_saved_language(void)
     strings_set_language(lang);
 }
 
-/* Menu: Language with English and Español. The checkmark follows the language
- * in force, so the menu itself shows which one is active. */
-static HMENU build_menu(void)
+/* Language picker opened from the globe button. Built on each click so its
+ * labels and the marked language always match the language in force. */
+static void show_language_menu(HWND owner)
 {
-    HMENU bar = CreateMenu();
-    HMENU lang = CreatePopupMenu();
-    AppendMenuW(lang, MF_STRING, IDM_LANG_EN, tr(STR_MENU_ENGLISH));
-    AppendMenuW(lang, MF_STRING, IDM_LANG_ES, tr(STR_MENU_SPANISH));
-    AppendMenuW(bar, MF_POPUP, (UINT_PTR)lang, tr(STR_MENU_LANGUAGE));
-    CheckMenuRadioItem(lang, IDM_LANG_EN, IDM_LANG_ES,
+    POINT pt;
+    HMENU menu = CreatePopupMenu();
+    if (!menu)
+        return;
+    AppendMenuW(menu, MF_STRING, IDM_LANG_EN, tr(STR_MENU_ENGLISH));
+    AppendMenuW(menu, MF_STRING, IDM_LANG_ES, tr(STR_MENU_SPANISH));
+    CheckMenuRadioItem(menu, IDM_LANG_EN, IDM_LANG_ES,
                        strings_language() == STR_LANG_ES ? IDM_LANG_ES : IDM_LANG_EN,
                        MF_BYCOMMAND);
-    return bar;
+    GetCursorPos(&pt);
+    SetForegroundWindow(owner);
+    TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, owner, NULL);
+    DestroyMenu(menu);
 }
 
 /* Writes the static caption of every control that create_controls() labels
@@ -1157,6 +1171,7 @@ static void relabel_controls(void)
     SetWindowTextW(g_controls.groupPlay, tr(STR_PLAY_GROUP));
     SetWindowTextW(g_controls.btnPrevious, tr(STR_BUTTON_PREVIOUS));
     SetWindowTextW(g_controls.btnNext, tr(STR_BUTTON_NEXT));
+    SetWindowTextW(g_controls.btnLang, tr(STR_MENU_LANGUAGE));
     SetWindowTextW(g_controls.checkLoop, tr(STR_CHECK_LOOP));
     SetWindowTextW(g_controls.groupSpeed, tr(STR_SPEED_GROUP));
     {
@@ -1182,11 +1197,10 @@ static void relabel_controls(void)
     InvalidateRect(g_hwnd, NULL, TRUE);
 }
 
-/* Switches the language at runtime: saves the choice, relabels every control
- * and the menu, and refreshes the dynamic texts through update_ui(). */
+/* Switches the language at runtime: saves the choice, relabels every control,
+ * and refreshes the dynamic texts through update_ui(). */
 static void set_language(StrLanguage lang)
 {
-    HMENU bar = GetMenu(g_hwnd);
     if (strings_language() == lang && g_settings_status == SETTINGS_OK)
         return;
     strings_set_language(lang);
@@ -1195,14 +1209,6 @@ static void set_language(StrLanguage lang)
     if (!g_selftest_mode && settings_save_language(lang) != 0)
         set_status(tr(STR_SETTINGS_SAVE_FAILED));
     relabel_controls();
-    if (bar) {
-        HMENU lang_menu = GetSubMenu(bar, 0);
-        if (lang_menu)
-            CheckMenuRadioItem(lang_menu, IDM_LANG_EN, IDM_LANG_ES,
-                               lang == STR_LANG_ES ? IDM_LANG_ES : IDM_LANG_EN,
-                               MF_BYCOMMAND);
-    }
-    DrawMenuBar(g_hwnd);
     update_ui();
 }
 
@@ -1216,7 +1222,6 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_CREATE:
         g_hwnd = hwnd;
         load_saved_language();
-        SetMenu(hwnd, build_menu());
         create_controls(hwnd);
         SetTimer(hwnd, TIMER_UI, UI_TICK_MS, NULL);
         return 0;
@@ -1252,6 +1257,47 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (wp == TIMER_UI)
             update_ui();
         return 0;
+
+    case WM_DRAWITEM: {
+        DRAWITEMSTRUCT *dis = (DRAWITEMSTRUCT *)lp;
+        IconKind kind;
+        COLORREF fg;
+        COLORREF bg;
+        HBRUSH face;
+        if (dis->CtlType != ODT_BUTTON)
+            return FALSE;
+        switch (dis->CtlID) {
+        case IDC_BTN_PLAY: {
+            TransportLogicalState ls = transport_logical_state(g_player_snapshot.state,
+                g_player_snapshot.speed_ppm == PLAYER_FLSM_SPEED_PPM,
+                g_player_snapshot.pair_sel, g_player_snapshot.pair_count);
+            kind = ls.playing ? ICON_PAUSE : ICON_PLAY;
+            break;
+        }
+        case IDC_BTN_PREVIOUS: kind = ICON_PREVIOUS; break;
+        case IDC_BTN_NEXT:     kind = ICON_NEXT; break;
+        case IDC_BTN_LANG:     kind = ICON_LANGUAGE; break;
+        default:
+            return FALSE;
+        }
+        /* Disabled buttons are drawn grey; pressed and normal use the face
+         * colour, so the glyph keeps its contrast in every state. */
+        if (dis->itemState & ODS_DISABLED)
+            fg = GetSysColor(COLOR_GRAYTEXT);
+        else
+            fg = GetSysColor(COLOR_BTNTEXT);
+        bg = GetSysColor(COLOR_BTNFACE);
+        face = CreateSolidBrush(bg);
+        FillRect(dis->hDC, &dis->rcItem, face);
+        DeleteObject(face);
+        icons_draw(dis->hDC, dis->rcItem, kind, fg);
+        if (dis->itemState & ODS_FOCUS) {
+            RECT focus = dis->rcItem;
+            InflateRect(&focus, -3, -3);
+            DrawFocusRect(dis->hDC, &focus);
+        }
+        return TRUE;
+    }
 
     case WM_CTLCOLORSTATIC:
     case WM_CTLCOLORBTN: {

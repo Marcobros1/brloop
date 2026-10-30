@@ -36,6 +36,10 @@ $col = Join-Path $env:APPDATA 'CT-MKWII\Mods\Metal Kart Wii Retro Rewind'
 $vgm = Join-Path $env:USERPROFILE 'Desktop\LoopingAudioConverter-3.2\tools\vgmstream\test.exe'
 $work = Join-Path $env:LOCALAPPDATA 'Temp\opencode\t2_verify'
 
+# Every test run sends silence to the device (the path stays the same), so the
+# battery never plays sound. Normal use never sets this variable.
+$env:MKW_SILENT_AUDIO = '1'
+
 $script:pass = 0
 $script:fail = 0
 $script:failures = @()

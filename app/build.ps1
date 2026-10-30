@@ -41,7 +41,9 @@ $srcCommon = (@(
     (Join-Path $root 'src\strings.c'),
     (Join-Path $root 'src\settings.c')
 ) | ForEach-Object { '"' + $_ + '"' }) -join ' '
-$srcUi = '"' + (Join-Path $root 'src\ui_selftest.c') + '"'
+# Drawing code needs GDI: only the window executable links it, so the headless
+# test build stays free of GDI and cannot pick up window-only code by accident.
+$srcUi = '"' + (Join-Path $root 'src\ui_selftest.c') + '" "' + (Join-Path $root 'src\icons.c') + '"'
 # /utf-8: source and wide literals are UTF-8 (Spanish UI strings);
 # UNICODE: wide Win32 API; winmm = waveOut, comctl32/comdlg32 = controls
 # and the open-file dialog.
