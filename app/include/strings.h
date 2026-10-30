@@ -70,8 +70,9 @@ typedef enum {
     X(STR_LIST_COUNT,           L"%d archivo(s) en la lista.", L"%d file(s) in the list.") \
     X(STR_DEVICE_RATE,          L"Dispositivo: %u Hz",         L"Device: %u Hz") \
     X(STR_DEVICE_RATE_STEREO,   L"Dispositivo: %u Hz · estéreo", L"Device: %u Hz · stereo") \
+    X(STR_DEVICE_RATE_EMPTY,    L"Dispositivo: —",             L"Device: —") \
     X(STR_TIME_SEPARATOR,       L":",                          L":") \
-    X(STR_LOOP_UNTIL_END,       L" (fin del archivo)",         L" (end of file)") \
+    X(STR_LOOP_END_POSITION,    L"%llu (fin del archivo)",     L"%llu (end of file)") \
     X(STR_LOOP_POSITION,        L"%u (%s)",                    L"%u (%s)") \
     X(STR_STATE_DECODE_ERROR,   L"Error de decodificación; reproducción detenida.", L"Decoding error; playback stopped.") \
     X(STR_AUDIO_OUTPUT_ERROR,   L"Error de salida de audio: %s", L"Audio output error: %s") \
@@ -86,13 +87,13 @@ typedef enum {
     X(STR_PREVIOUS_TRACK,       L"Canción anterior.",          L"Previous track.") \
     X(STR_NEXT_TRACK,           L"Siguiente canción.",         L"Next track.") \
     X(STR_VERSION_SELECTED,     L"Versión %d: canales %d-%d.", L"Version %d: channels %d-%d.") \
-    X(STR_FILE_OPEN_TITLE,      L"Archivos BRSTM (*.brstm)",   L"BRSTM files (*.brstm)") \
-    X(STR_INVALID_FILE_TITLE,   L"Todos los archivos (*.*)",   L"All files (*.*)") \
-    X(STR_INVALID_FILE_MORE,    L"Archivo no válido o ilegible", L"Invalid or unreadable file") \
-    X(STR_FATAL_TITLE,          L"%s\n(y otros %d archivos no válidos)", L"%s\n(and %d other invalid files)") \
-    X(STR_ENGINE_START_FAILED,  L"Error fatal",                L"Fatal error") \
+    X(STR_FILTER_BRSTM,         L"Archivos BRSTM (*.brstm)",   L"BRSTM files (*.brstm)") \
+    X(STR_FILTER_ALL,           L"Todos los archivos (*.*)",   L"All files (*.*)") \
+    X(STR_INVALID_FILE_TITLE,   L"Archivo no válido o ilegible", L"Invalid or unreadable file") \
+    X(STR_INVALID_FILES_MORE,   L"%s\n(y otros %d archivos no válidos)", L"%s\n(and %d other invalid files)") \
+    X(STR_FATAL_ERROR_TITLE,    L"Error fatal",                L"Fatal error") \
+    X(STR_ENGINE_START_FAILED,  L"No se pudo iniciar el motor de reproducción.", L"Could not start the playback engine.") \
     X(STR_WINDOW_TITLE,         L"Metal Kart Wii — Reproductor BRSTM (T2)", L"Metal Kart Wii — BRSTM Player (T2)") \
-    X(STR_CAP_OPEN,             L"Abrir",                      L"Open") \
     X(STR_MENU_LANGUAGE,        L"Idioma",                     L"Language") \
     X(STR_MENU_ENGLISH,         L"English",                    L"English") \
     X(STR_MENU_SPANISH,         L"Español",                    L"Español")

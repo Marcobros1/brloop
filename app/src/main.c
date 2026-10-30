@@ -140,7 +140,10 @@ static void list_insert_row(int idx, const TrackRow *row)
     ListView_SetItemText(g_controls.list, idx, 2, buf);
     format_time(buf, 64, (double)row->total / row->rate);
     ListView_SetItemText(g_controls.list, idx, 3, buf);
-    ListView_SetItemText(g_controls.list, idx, 4, row->loop ? L"Sí" : L"No");
+    /* The list view copies the text and never writes to it, so the const
+     * string from the table is safe to pass through its non-const parameter. */
+    ListView_SetItemText(g_controls.list, idx, 4,
+                         (wchar_t *)(row->loop ? tr(STR_LOOP_YES) : tr(STR_LOOP_NO)));
 }
 
 /* Info panel with nothing to show: placeholders + loop control disabled, so
@@ -154,8 +157,8 @@ static void clear_info_panel(void)
     SetWindowTextW(g_controls.valSamples, L"—");
     SetWindowTextW(g_controls.valDur, L"—");
     SetWindowTextW(g_controls.valLoop, L"—");
-    SetWindowTextW(g_controls.valLoopSt, L"No disponible");
-    SetWindowTextW(g_controls.valLoopEnd, L"No disponible");
+    SetWindowTextW(g_controls.valLoopSt, tr(STR_LOOP_UNAVAILABLE));
+    SetWindowTextW(g_controls.valLoopEnd, tr(STR_LOOP_UNAVAILABLE));
     EnableWindow(g_controls.checkLoop, FALSE);
 }
 
@@ -179,14 +182,14 @@ static void fill_info_panel(const PlayerSnapshot *s)
         format_time(t, 40, (double)s->loop_start / s->sample_rate);
         swprintf(buf, 128, L"%u (%s)", s->loop_start, t);
         SetWindowTextW(g_controls.valLoopSt, buf);
-        swprintf(buf, 128, L"%llu (fin del archivo)",
+        swprintf(buf, 128, tr(STR_LOOP_END_POSITION),
                  (unsigned long long)s->total_samples);
         SetWindowTextW(g_controls.valLoopEnd, buf);
-        SetWindowTextW(g_controls.valLoop, L"Sí");
+        SetWindowTextW(g_controls.valLoop, tr(STR_LOOP_YES));
     } else {
-        SetWindowTextW(g_controls.valLoop, L"No");
-        SetWindowTextW(g_controls.valLoopSt, L"No disponible");
-        SetWindowTextW(g_controls.valLoopEnd, L"No disponible");
+        SetWindowTextW(g_controls.valLoop, tr(STR_LOOP_NO));
+        SetWindowTextW(g_controls.valLoopSt, tr(STR_LOOP_UNAVAILABLE));
+        SetWindowTextW(g_controls.valLoopEnd, tr(STR_LOOP_UNAVAILABLE));
     }
     EnableWindow(g_controls.checkLoop, s->file_loop != 0);
     SendMessageW(g_controls.checkLoop, BM_SETCHECK,
@@ -262,7 +265,7 @@ static int add_track(const wchar_t *path, wchar_t *errbuf, size_t errlen)
     LibraryTrackInfo info;
 
     if (!narrow_path(path, narrow, sizeof narrow)) {
-        swprintf(errbuf, errlen, L"«%s»: ruta no representable en ANSI",
+        swprintf(errbuf, errlen, tr(STR_PATH_NOT_ANSI_NAMED),
                  file_name_of(path));
         return -1;
     }
@@ -270,7 +273,7 @@ static int add_track(const wchar_t *path, wchar_t *errbuf, size_t errlen)
     if (st != BRSTM_OK) {
         wchar_t werr[512];
         MultiByteToWideChar(CP_ACP, 0, err, -1, werr, 512);
-        swprintf(errbuf, errlen, L"«%s»: %s", file_name_of(path), werr);
+        swprintf(errbuf, errlen, tr(STR_TRACK_INVALID_NAMED), file_name_of(path), werr);
         return -1;
     }
 
@@ -282,7 +285,7 @@ static int add_track(const wchar_t *path, wchar_t *errbuf, size_t errlen)
     brstm_close(&tmp);
 
     if (library_add(&g_library, path, file_name_of(path), &info) != 0) {
-        swprintf(errbuf, errlen, L"«%s»: sin memoria", file_name_of(path));
+        swprintf(errbuf, errlen, tr(STR_TRACK_NO_MEMORY), file_name_of(path));
         return -1;
     }
     list_insert_row(g_library.count - 1, &g_library.rows[g_library.count - 1]);
@@ -331,7 +334,7 @@ static void remove_all(void)
     library_clear(&g_library);
     ListView_DeleteAllItems(g_controls.list);
     clear_info_panel();
-    set_status(L"Lista vacía.");
+    set_status(tr(STR_LIST_EMPTY));
 }
 
 /* ----------------------------------------------------------- file open -- */
@@ -353,8 +356,21 @@ static void browse_files(void)
     memset(buf, 0, sizeof buf);
     ofn.lStructSize = sizeof ofn;
     ofn.hwndOwner = g_hwnd;
-    ofn.lpstrFilter =
-        L"Archivos BRSTM (*.brstm)\0*.brstm\0Todos los archivos (*.*)\0*.*\0";
+    /* File-dialog filter: each name is followed by its pattern, and the list
+     * ends with a double NUL, so the pieces are joined by hand. */
+    {
+        wchar_t filter[256];
+        size_t fi = 0;
+        const wchar_t *parts[4] = { tr(STR_FILTER_BRSTM), L"*.brstm", tr(STR_FILTER_ALL), L"*.*" };
+        int pi;
+        for (pi = 0; pi < 4; pi++) {
+            size_t len = wcslen(parts[pi]);
+            memcpy(filter + fi, parts[pi], (len + 1) * sizeof(wchar_t));
+            fi += len + 1;
+        }
+        filter[fi] = L'\0';
+        ofn.lpstrFilter = filter;
+    }
     ofn.lpstrFile = buf;
     ofn.nMaxFile = 65536;
     ofn.Flags = OFN_ALLOWMULTISELECT | OFN_EXPLORER
@@ -390,18 +406,17 @@ static void browse_files(void)
     if (failed > 0) {
         wchar_t box[2048];
         if (failed > 1)
-            swprintf(box, 2048, L"%s\n(y otros %d archivos no válidos)",
-                     msg, failed - 1);
+            swprintf(box, 2048, tr(STR_INVALID_FILES_MORE), msg, failed - 1);
         else
             swprintf(box, 2048, L"%s", msg);
-        MessageBoxW(g_hwnd, box, L"Archivo no válido o ilegible",
+        MessageBoxW(g_hwnd, box, tr(STR_INVALID_FILE_TITLE),
                     MB_OK | MB_ICONWARNING);
     }
     if (added > 0 && g_library.selected_index < 0 && g_library.count > 0)
         ListView_SetItemState(g_controls.list, 0, LVIS_SELECTED | LVIS_FOCUSED,
                               LVIS_SELECTED | LVIS_FOCUSED);
     if (added > 0) {
-        swprintf(sum, 128, L"%d archivo(s) en la lista.", g_library.count);
+        swprintf(sum, 128, tr(STR_LIST_COUNT), g_library.count);
         set_status(sum);
     }
 }
@@ -696,8 +711,8 @@ static void create_controls(HWND parent)
     col.mask = LVCF_FMT | LVCF_WIDTH | LVCF_TEXT;
     col.fmt = LVCFMT_LEFT;
     {
-        const wchar_t *names[5] = { L"Nombre", L"Hz", L"Canales",
-                                    L"Duración", L"Loop" };
+        const wchar_t *names[5] = { tr(STR_COL_NAME), tr(STR_COL_RATE), tr(STR_COL_CHANNELS),
+                                    tr(STR_COL_DURATION), tr(STR_COL_LOOP) };
         int widths[5] = { 170, 55, 62, 74, 48 };
         for (i = 0; i < 5; i++) {
             col.pszText = (wchar_t *)names[i];
@@ -743,9 +758,9 @@ static void create_controls(HWND parent)
                             IDC_VAL_DUR, 0, 0, 0, 0);
     g_controls.valLoop = make_ctl(parent, 0, L"STATIC", L"—", 0,
                              IDC_VAL_LOOP, 0, 0, 0, 0);
-    g_controls.valLoopSt = make_ctl(parent, 0, L"STATIC", L"No disponible", 0,
+    g_controls.valLoopSt = make_ctl(parent, 0, L"STATIC", tr(STR_LOOP_UNAVAILABLE), 0,
                                IDC_VAL_LOOPST, 0, 0, 0, 0);
-    g_controls.valLoopEnd = make_ctl(parent, 0, L"STATIC", L"No disponible", 0,
+    g_controls.valLoopEnd = make_ctl(parent, 0, L"STATIC", tr(STR_LOOP_UNAVAILABLE), 0,
                                 IDC_VAL_LOOPEND, 0, 0, 0, 0);
     g_controls.capVer = make_ctl(parent, 0, L"STATIC", tr(STR_CAP_VERSION), 0,
                             IDC_CAP_VER, 0, 0, 0, 0);
@@ -919,15 +934,14 @@ static void update_ui(void)
     devRate = s.sample_rate ? (double)s.device_rate : 0.0;
     if (s.sample_rate) {
         if (s.audio_folded || s.pair_sel >= 0)
-            swprintf(buf, 160, L"Dispositivo: %u Hz · estéreo",
-                     s.device_rate);
+            swprintf(buf, 160, tr(STR_DEVICE_RATE_STEREO), s.device_rate);
         else
-            swprintf(buf, 160, L"Dispositivo: %u Hz", s.device_rate);
+            swprintf(buf, 160, tr(STR_DEVICE_RATE), s.device_rate);
         SetWindowTextW(g_controls.valDevRate, buf);
         format_speed(buf, 40, s.speed_ppm);
         SetWindowTextW(g_controls.valSpeed, buf);
     } else {
-        SetWindowTextW(g_controls.valDevRate, L"Dispositivo: —");
+        SetWindowTextW(g_controls.valDevRate, tr(STR_DEVICE_RATE_EMPTY));
     }
 
     if (g_progress_position != s.position || g_progress_total != s.total_samples ||
@@ -952,12 +966,12 @@ static void update_ui(void)
     if (s.audio_error != 0 && s.audio_error != g_last_reported_error) {
         wchar_t werr[256], msg[320];
         waveOutGetErrorTextW(s.audio_error, werr, 256);
-        swprintf(msg, 320, L"Error de salida de audio: %s", werr);
+        swprintf(msg, 320, tr(STR_AUDIO_OUTPUT_ERROR), werr);
         set_status(msg);
         g_last_reported_error = s.audio_error;
     }
     if (s.decode_failed && !g_decode_reported) {
-        set_status(L"Error de decodificación; reproducción detenida.");
+        set_status(tr(STR_STATE_DECODE_ERROR));
         g_decode_reported = 1;
     }
 }
@@ -1069,7 +1083,7 @@ static void on_command(int id)
             break;
         if (player_set_channel_pair(g_player, next) != 0)
             break;
-        swprintf(msg, 80, L"Versión %d: canales %d-%d.",
+        swprintf(msg, 80, tr(STR_VERSION_SELECTED),
                  next + 1, next * 2 + 1, next * 2 + 2);
         set_status(msg);
         break;
@@ -1277,8 +1291,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
 
     g_player = player_create(1);
     if (!g_player) {
-        MessageBoxW(NULL, L"No se pudo iniciar el motor de reproducción.",
-                    L"Error fatal", MB_OK | MB_ICONERROR);
+        MessageBoxW(NULL, tr(STR_ENGINE_START_FAILED),
+                    tr(STR_FATAL_ERROR_TITLE), MB_OK | MB_ICONERROR);
         LocalFree(argv);
         return 1;
     }
@@ -1286,7 +1300,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
     /* Tracks are added after the window exists: add_track inserts into the
      * ListView, which is created during CreateWindowExW (WM_CREATE). */
     g_hwnd = CreateWindowExW(0, L"MkwiiBrstmPlayer",
-                             L"Metal Kart Wii — Reproductor BRSTM (T2)",
+                             tr(STR_WINDOW_TITLE),
                              WS_OVERLAPPEDWINDOW,
                              CW_USEDEFAULT, CW_USEDEFAULT, 940, 520,
                              NULL, NULL, inst, NULL);
