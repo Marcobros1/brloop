@@ -412,6 +412,7 @@ static void st_phase_language(void)
     wchar_t cap[64] = L"";
     StrLanguage before = strings_language();
 
+
     send_cmd(IDM_LANG_EN);
     pump(100);
     {
@@ -523,6 +524,18 @@ static int run_selftest(void)
                 g_test->has_invalid_path ? " + invalid file" : "");
 
     st_check((*g_test->row_count) >= 2, "at least 2 tracks loaded");
+    /* The startup notice about a bad settings file must still be in the status
+     * bar before any action replaces it. Checked here, not later, because the
+     * first track opened overwrites the bar. Only runs when the environment asks
+     * for it, since a normal run starts from a valid or absent file. */
+    if (_wgetenv(L"MKW_EXPECT_SETTINGS_NOTICE") != NULL) {
+        wchar_t bar[256] = L"";
+        SendMessageW((*g_test->controls).status, SB_GETTEXTW, 0, (LPARAM)bar);
+        /* An invalid file falls back to English, so the notice is in English. */
+        st_logf("status bar at startup: [%ls]\n", bar);
+        st_check(wcsstr(bar, L"settings file is invalid") != NULL,
+                 "invalid settings file shows the notice in the status bar");
+    }
     st_phase_library();
     st_log_handles("after library");
     st_phase_transport();

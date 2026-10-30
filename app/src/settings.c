@@ -7,11 +7,20 @@
 #define SETTINGS_FOLDER L"MetalKartWiiPlayer"
 #define SETTINGS_FILE L"settings.json"
 
-/* Folder is %APPDATA%\MetalKartWiiPlayer. Created on demand by the save path. */
+/* Folder is %APPDATA%\MetalKartWiiPlayer, created on demand by the save path.
+ * MKW_SETTINGS_DIR, when set, replaces the whole folder: test runs point it at
+ * a scratch directory so they can never touch the user's real preference. */
 static int settings_folder(wchar_t *out, size_t out_len)
 {
+    wchar_t override[MAX_PATH];
     wchar_t appdata[MAX_PATH];
-    DWORD n = GetEnvironmentVariableW(L"APPDATA", appdata, MAX_PATH);
+    DWORD n = GetEnvironmentVariableW(L"MKW_SETTINGS_DIR", override, MAX_PATH);
+    if (n > 0 && n < MAX_PATH) {
+        if (swprintf(out, out_len, L"%s", override) < 0)
+            return 0;
+        return 1;
+    }
+    n = GetEnvironmentVariableW(L"APPDATA", appdata, MAX_PATH);
     if (n == 0 || n >= MAX_PATH)
         return 0;
     if (swprintf(out, out_len, L"%s\\%s", appdata, SETTINGS_FOLDER) < 0)

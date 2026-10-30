@@ -1219,8 +1219,6 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         SetMenu(hwnd, build_menu());
         create_controls(hwnd);
         SetTimer(hwnd, TIMER_UI, UI_TICK_MS, NULL);
-        if (g_settings_status == SETTINGS_INVALID)
-            set_status(tr(STR_SETTINGS_INVALID));
         return 0;
 
     case WM_SIZE:
@@ -1429,6 +1427,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
     if (g_library.count > 0)
         ListView_SetItemState(g_controls.list, 0, LVIS_SELECTED | LVIS_FOCUSED,
                               LVIS_SELECTED | LVIS_FOCUSED);
+    /* Written last: opening the first track on the command line overwrites the
+     * status bar, so the notice about a bad settings file goes after it. */
+    if (g_settings_status == SETTINGS_INVALID)
+        set_status(tr(STR_SETTINGS_INVALID));
 
     if (g_selftest_mode) {
         UiSelfTestContext test = {0};

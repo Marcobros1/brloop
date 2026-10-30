@@ -120,6 +120,10 @@ Write-Host '=== 6. brstm_player --selftest ===' -ForegroundColor Cyan
 $stReport = Join-Path $work 'selftest_report.txt'
 $stLog = Join-Path $work 'selftest_stdout.txt'
 $stErr = Join-Path $work 'selftest_stderr.txt'
+# The self-test writes its language choice to MKW_SETTINGS_DIR, never to the
+# user's %APPDATA%: a test run must not change the preference of the person
+# running it.
+$env:MKW_SETTINGS_DIR = Join-Path $work 'settings'
 $stArgs = @('--selftest', (Join-Path $col 'tKD_N.brstm'),
             (Join-Path $col 'o_Crs_In_Fan_Wifi.brstm'),
             '--invalid', $badFile, '--report', $stReport)
