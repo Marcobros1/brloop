@@ -93,7 +93,7 @@ typedef enum {
     X(STR_INVALID_FILES_MORE,   L"%s\n(y otros %d archivos no válidos)", L"%s\n(and %d other invalid files)") \
     X(STR_FATAL_ERROR_TITLE,    L"Error fatal",                L"Fatal error") \
     X(STR_ENGINE_START_FAILED,  L"No se pudo iniciar el motor de reproducción.", L"Could not start the playback engine.") \
-    X(STR_WINDOW_TITLE,         L"Metal Kart Wii — Reproductor BRSTM (T2)", L"Metal Kart Wii — BRSTM Player (T2)") \
+    X(STR_WINDOW_TITLE,         L"BRLoop — Reproductor BRSTM", L"BRLoop — BRSTM Player") \
     X(STR_MENU_LANGUAGE,        L"Idioma",                     L"Language") \
     X(STR_MENU_ENGLISH,         L"English",                    L"English") \
     X(STR_MENU_SPANISH,         L"Español",                    L"Español") \

@@ -1,4 +1,4 @@
-# Metal Kart Wii Music App architecture
+# BRLoop architecture
 
 This document describes the current Windows player before the Android and web
 frontends exist. It is a map for contributors, not a replacement for the

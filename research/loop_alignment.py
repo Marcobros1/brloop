@@ -2,7 +2,7 @@
 import os
 import struct
 
-COL = r"<personal-path> Kart Wii Retro Rewind"
+COL = os.environ.get("MKW_COLLECTION", os.path.join(os.environ["APPDATA"], "CT-MKWII", "Mods", "Metal Kart Wii Retro Rewind"))
 
 aligned, misaligned, no_loop = [], [], []
 samples = {}

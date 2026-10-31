@@ -3,10 +3,11 @@
 Locates known values reported by vgmstream (sample rate, loop start, total
 samples) inside the file header to determine their exact offsets.
 """
+import os
 import struct
 import sys
 
-COL = r"<personal-path> Kart Wii Retro Rewind"
+COL = os.environ.get("MKW_COLLECTION", os.path.join(os.environ["APPDATA"], "CT-MKWII", "Mods", "Metal Kart Wii Retro Rewind"))
 
 TESTS = {
     "uTTC_N.brstm": {"sr": 44100, "loopstart": 5634048, "total": 12786908},

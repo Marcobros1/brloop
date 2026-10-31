@@ -1,4 +1,4 @@
-# T1 verification — Metal Kart Wii Music App
+# T1 verification — BRLoop
 
 Verifies the BRSTM reader and DSP-ADPCM decoder (`core/`) against vgmstream
 and against controlled invalid-file cases.
@@ -7,7 +7,8 @@ and against controlled invalid-file cases.
 
 - Visual Studio 2022 with C++ x64 tools (located via vswhere).
 - Python 3.
-- vgmstream CLI: `%USERPROFILE%\Desktop\LoopingAudioConverter-3.2\tools\vgmstream\test.exe`
+- vgmstream CLI: por defecto `%USERPROFILE%\Desktop\LoopingAudioConverter-3.2\tools\vgmstream\test.exe`.
+  Para usar otra copia, define `MKW_VGMSTREAM` con la ruta completa.
 - Collection: `%APPDATA%\CT-MKWII\Mods\Metal Kart Wii Retro Rewind` (read-only).
 
 ## Run everything

@@ -4,10 +4,10 @@
 #include <string.h>
 #include <windows.h>
 
-#define SETTINGS_FOLDER L"MetalKartWiiPlayer"
+#define SETTINGS_FOLDER L"BRLoop"
 #define SETTINGS_FILE L"settings.json"
 
-/* Folder is %APPDATA%\MetalKartWiiPlayer, created on demand by the save path.
+/* Folder is %APPDATA%\BRLoop, created on demand by the save path.
  * MKW_SETTINGS_DIR, when set, replaces the whole folder: test runs point it at
  * a scratch directory so they can never touch the user's real preference. */
 static int settings_folder(wchar_t *out, size_t out_len)

@@ -10,7 +10,7 @@ import os
 import struct
 import sys
 
-COL = r'<personal-path> Kart Wii Retro Rewind'
+COL = os.environ.get("MKW_COLLECTION", os.path.join(os.environ["APPDATA"], "CT-MKWII", "Mods", "Metal Kart Wii Retro Rewind"))
 N_BLOCKS = 6
 
 

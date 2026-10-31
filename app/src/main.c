@@ -1,4 +1,4 @@
-﻿/* Metal Kart Wii desktop prototype (T2): Win32 test UI for the BRSTM
+﻿/* BRLoop desktop prototype (T2): Win32 test UI for the BRSTM
  * playback engine.
  *
  * Layering: this file only handles windows, controls and file listing;
@@ -1488,7 +1488,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
     wc.hIcon = LoadIconW(NULL, (LPCWSTR)IDI_APPLICATION);
     wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
     wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
-    wc.lpszClassName = L"MkwiiBrstmPlayer";
+    wc.lpszClassName = L"BRLoopPlayer";
     if (!RegisterClassExW(&wc))
         return 1;
 
@@ -1523,7 +1523,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
 
     /* Tracks are added after the window exists: add_track inserts into the
      * ListView, which is created during CreateWindowExW (WM_CREATE). */
-    g_hwnd = CreateWindowExW(0, L"MkwiiBrstmPlayer",
+    g_hwnd = CreateWindowExW(0, L"BRLoopPlayer",
                              tr(STR_WINDOW_TITLE),
                              WS_OVERLAPPEDWINDOW,
                              CW_USEDEFAULT, CW_USEDEFAULT, 940, 520,

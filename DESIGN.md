@@ -1,4 +1,4 @@
-# DESIGN.md — Metal Kart Wii Music App
+# DESIGN.md — BRLoop
 
 Dirección visual del reproductor. La escribe el dueño del proyecto; el filtro antislop solo aplica encima. Las decisiones marcadas como pendientes no están tomadas: no se deben inventar en el código.
 

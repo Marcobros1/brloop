@@ -132,7 +132,7 @@ function Find-Dialog([int]$pidF, [IntPtr]$mainH) {
 
 # --- 0) prerequisites -------------------------------------------------------
 if (-not (Test-Path $InputFile)) {
-    $src = Join-Path '<personal-path> Kart Wii Retro Rewind' 'tKD_N.brstm'
+    $src = Join-Path (if ($env:MKW_COLLECTION) { $env:MKW_COLLECTION } else { Join-Path $env:APPDATA 'CT-MKWII\Mods\Metal Kart Wii Retro Rewind' }) 'tKD_N.brstm'
     Copy-Item $src $InputFile -Force
 }
 if (Test-Path $OutputFile) { Remove-Item $OutputFile -Force }

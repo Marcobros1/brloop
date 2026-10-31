@@ -1,6 +1,6 @@
-# Builds the Metal Kart Wii desktop prototype (T2) with MSVC (cl.exe).
+# Builds the BRLoop desktop prototype (T2) with MSVC (cl.exe).
 # Usage: powershell -ExecutionPolicy Bypass -File app\build.ps1
-# Output: app\build\brstm_player.exe, app\build\player_tests.exe
+# Output: app\build\brloop.exe, app\build\player_tests.exe
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -64,7 +64,7 @@ $lines = @(
     # which ignores it and names the output after the first source file.
     ($playerFlags + $srcCommon + ' ' + $srcUi + ' "' +
      (Join-Path $root 'src\main.c') + '"' +
-     ' /Fe:brstm_player.exe' + $playerLink),
+     ' /Fe:brloop.exe' + $playerLink),
     ('if errorlevel 1 exit /b 1'),
     ($playerFlags + $srcCommon + ' ' + $wav + ' "' +
      (Join-Path $root 'tests\player_tests.c') + '"' +
@@ -85,4 +85,4 @@ Remove-Item -Path $bat -Force
 $fontDir = Join-Path $build 'assets\fonts'
 New-Item -ItemType Directory -Force -Path $fontDir | Out-Null
 Copy-Item -Path (Join-Path $root 'assets\fonts\*') -Destination $fontDir -Force
-Write-Host "Built: $build\brstm_player.exe, $build\player_tests.exe"
+Write-Host "Built: $build\brloop.exe, $build\player_tests.exe"

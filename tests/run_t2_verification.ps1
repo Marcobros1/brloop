@@ -6,7 +6,7 @@
 # Steps:
 #   1. T1 harness (core parser/decoder) must pass before any T2 work runs.
 #   2. SHA-256 of every .brstm in the reference collection (baseline).
-#   3. Build the app (brstm_player.exe + player_tests.exe).
+#   3. Build the app (brloop.exe + player_tests.exe).
 #   4. Regenerate the invalid mutants from tKD_N.brstm.
 #   5. player_tests full battery:
 #        metadata (44100/48000/51269, 4ch, 8ch, no-loop) speed (FLSM mapping)
@@ -15,7 +15,7 @@
 #        memory (stable over 16M looped frames)  th (transport, headless)
 #        probe (handle balance)             ta (real device transport, 4ch fold)
 #        realtime (1.0x vs FLSM duration, live loop wrap)
-#   6. brstm_player --selftest: real window, real handlers, invalid file
+#   6. brloop --selftest: real window, real handlers, invalid file
 #      rejected, track change, pause/resume, FLSM speed, close releases
 #      resources.
 #   7. SHA-256 of the collection again: playback must not modify originals.
@@ -29,11 +29,13 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $scriptDir
 $appDir = Join-Path $root 'app'
 $testsExe = Join-Path $appDir 'build\player_tests.exe'
-$playerExe = Join-Path $appDir 'build\brstm_player.exe'
+$playerExe = Join-Path $appDir 'build\brloop.exe'
 $mkInvalid = Join-Path $scriptDir 'make_invalid_cases.py'
 $t1Script = Join-Path $scriptDir 'run_verification.ps1'
 $col = Join-Path $env:APPDATA 'CT-MKWII\Mods\Metal Kart Wii Retro Rewind'
-$vgm = Join-Path $env:USERPROFILE 'Desktop\LoopingAudioConverter-3.2\tools\vgmstream\test.exe'
+# vgmstream CLI, used as the reference decoder. Set MKW_VGMSTREAM to point at
+# another copy; the default assumes the LoopingAudioConverter layout.
+$vgm = if ($env:MKW_VGMSTREAM) { $env:MKW_VGMSTREAM } else { Join-Path $env:USERPROFILE 'Desktop\LoopingAudioConverter-3.2\tools\vgmstream\test.exe' }
 $work = Join-Path $env:LOCALAPPDATA 'Temp\opencode\t2_verify'
 
 # Every test run sends silence to the device (the path stays the same), so the
@@ -89,7 +91,7 @@ $buildLog = Join-Path $work 'build.txt'
 $buildCode = Invoke-Logged 'powershell' @('-ExecutionPolicy', 'Bypass', '-File', (Join-Path $appDir 'build.ps1')) $buildLog
 Check 'app build succeeds' ($buildCode -eq 0) ('exit=' + $buildCode + ' log=' + $buildLog)
 Check 'player_tests.exe exists' (Test-Path $testsExe) $testsExe
-Check 'brstm_player.exe exists' (Test-Path $playerExe) $playerExe
+Check 'brloop.exe exists' (Test-Path $playerExe) $playerExe
 Check 'vgmstream test.exe exists' (Test-Path $vgm) $vgm
 
 Write-Host '=== 4. invalid mutants ===' -ForegroundColor Cyan
@@ -120,7 +122,7 @@ Check 'no [FAIL] line in the battery' ($failLines.Count -eq 0) ($failLines -join
 
 # -------------------------------------- 6. UI selftest (real window/handlers)
 
-Write-Host '=== 6. brstm_player --selftest ===' -ForegroundColor Cyan
+Write-Host '=== 6. brloop --selftest ===' -ForegroundColor Cyan
 $stReport = Join-Path $work 'selftest_report.txt'
 $stLog = Join-Path $work 'selftest_stdout.txt'
 $stErr = Join-Path $work 'selftest_stderr.txt'

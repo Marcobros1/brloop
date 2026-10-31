@@ -33,9 +33,41 @@ t2_work/
 t2_verify/
 *_report.txt
 
+# ---- Paquetes de release y dumps (se generan, no se versionan) ----
+dist/
+release/
+*.zip
+*.7z
+*.dmp
+*.tmp
+.pytest_cache/
+
 # ---- Editores y sistema ----
 .vs/
 .vscode/
+.idea/
 *.user
+*.suo
+*.sln.docstates
+*.ncb
+*.sdf
+*.db
+*.opensdf
 Thumbs.db
 desktop.ini
+*.swp
+*~
+
+# ---- Python (scripts de investigación) ----
+__pycache__/
+*.pyc
+
+# ---- Copias de seguridad y restos de parches ----
+*.bak
+*.orig
+*.rej
+
+# ---- Variables locales de la máquina (no se versionan) ----
+.env
+.env.*
+local.props

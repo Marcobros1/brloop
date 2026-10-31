@@ -9,7 +9,7 @@ import struct
 import sys
 import tempfile
 
-COL = r"<personal-path> Kart Wii Retro Rewind"
+COL = os.environ.get("MKW_COLLECTION", os.path.join(os.environ["APPDATA"], "CT-MKWII", "Mods", "Metal Kart Wii Retro Rewind"))
 FILE = os.path.join(COL, "uTTC_N.brstm")
 REF_WAV = os.path.join(tempfile.mkdtemp(prefix="brstm_exp_"), "uTTC_full.wav")
 

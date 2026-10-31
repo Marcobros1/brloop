@@ -7,10 +7,17 @@ import struct
 import sys
 import os
 
-A = r"<personal-path>"
-B = r"<personal-path>"
-if not os.path.exists(A):
-    A = r"<personal-path> Kart Wii Retro Rewind\5_1_N.brstm"
+# MKW_WORKDIR: optional folder with working copies (5_1_N.brstm and 5_1_F.brstm).
+# Without it, the input comes from the collection (MKW_COLLECTION) and the FLSM
+# output is not compared, so the script needs both files to run.
+WORKDIR = os.environ.get("MKW_WORKDIR", "")
+COLLECTION = os.environ.get("MKW_COLLECTION", os.path.join(os.environ["APPDATA"], "CT-MKWII", "Mods", "Metal Kart Wii Retro Rewind"))
+A = os.path.join(WORKDIR, "5_1_N.brstm") if WORKDIR else ""
+B = os.path.join(WORKDIR, "5_1_F.brstm") if WORKDIR else ""
+if not B or not os.path.exists(B):
+    sys.exit("flsm_compare: set MKW_WORKDIR to the folder holding 5_1_F.brstm (the FLSM output)")
+if not A or not os.path.exists(A):
+    A = os.path.join(COLLECTION, "5_1_N.brstm")
 
 
 def parse(path):

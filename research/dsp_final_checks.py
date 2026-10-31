@@ -15,7 +15,7 @@ import struct
 
 import dsp_formula_probe as P
 
-COL = r"<personal-path> Kart Wii Retro Rewind"
+COL = os.environ.get("MKW_COLLECTION", os.path.join(os.environ["APPDATA"], "CT-MKWII", "Mods", "Metal Kart Wii Retro Rewind"))
 
 # --- 1. exact formula on non-silent span -------------------------------
 m = P.parse(P.FILE)

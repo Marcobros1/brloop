@@ -4,9 +4,10 @@ Method: scan for printable ASCII and UTF-16LE sequences. No disassembly,
 no IL decoding - only user-visible text, to document offered options.
 """
 import re
+import os
 import sys
 
-PATH = r"<personal-path> Lap Stream Maker.exe"
+PATH = os.environ.get("MKW_FLSM", os.path.join(os.path.expanduser("~"), "Desktop", "MKWIIMUSIC", "Final Lap Stream Maker.exe"))
 data = open(PATH, "rb").read()
 print("exe size:", len(data))
 
