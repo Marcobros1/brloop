@@ -88,3 +88,5 @@ Third-party material, its licenses and the sources used for reference are listed
 
 Any Wii/GameCube games and the BRSTM files of its tracks belong to their respective owners.
 This project does not distribute them.
+
+[![Quality gate status](https://sonarcloud.io/api/project_badges/measure?project=Marcobros1_brloop&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=Marcobros1_brloop)
