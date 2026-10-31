@@ -208,7 +208,8 @@ static int envelope_init(Envelope *env, uint32_t total_samples)
  * the given stride (samples_per_block), so each channel copies from its own
  * row. Completed windows are reduced to a mean of squares immediately, which
  * keeps the retained data at one double per channel per 1024 samples instead
- * of the full PCM. */
+ * of the full PCM. The caller must guarantee nc <= MAX_CH: env->buf has one
+ * slot per channel and main() rejects wider files before decoding starts. */
 static void envelope_append(Envelope *env, const int16_t *pcm, uint32_t stride,
                             uint32_t nc, uint32_t frames)
 {
