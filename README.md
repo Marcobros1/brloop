@@ -83,5 +83,8 @@ MIT. See [`LICENSE`](LICENSE).
 The interface font, Pixelify Sans, is distributed under the SIL Open Font License 1.1.
 Its license is in [`app/assets/fonts/OFL.txt`](app/assets/fonts/OFL.txt).
 
+Third-party material, its licenses and the sources used for reference are listed in
+[`THIRD_PARTY.md`](THIRD_PARTY.md).
+
 Any Wii/Gamecube games and the BRSTM files of its tracks belong to their respective owners.
 This project does not distribute them.

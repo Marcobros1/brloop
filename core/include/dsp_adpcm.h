@@ -9,7 +9,10 @@
  *   bytes 1..7: 14 samples as 4-bit two's complement nibbles, high nibble
  *           first (14 samples per 8-byte frame).
  *
- * Sample formula (identical to VGAudio's GcAdpcmDecoder, MIT):
+ * Sample formula: the Nintendo DSP-ADPCM decoding equation as described in the
+ * public BRSTM documentation (WiiBrew, https://wiibrew.org/wiki/BRSTM_file).
+ * The same equation is used by VGAudio's GcAdpcmDecoder (MIT); this file is an
+ * independent implementation, and VGAudio was used only as a cross-check.
  *
  *   distance  = nibble * ((1 << scale) * 2048)
  *   corrected = coef1 * hist1 + coef2 * hist2 + distance

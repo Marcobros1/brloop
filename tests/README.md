@@ -7,8 +7,8 @@ and against controlled invalid-file cases.
 
 - Visual Studio 2022 with C++ x64 tools (located via vswhere).
 - Python 3.
-- vgmstream CLI: por defecto `%USERPROFILE%\Desktop\LoopingAudioConverter-3.2\tools\vgmstream\test.exe`.
-  Para usar otra copia, define `MKW_VGMSTREAM` con la ruta completa.
+- vgmstream CLI: by default `%USERPROFILE%\Desktop\LoopingAudioConverter-3.2\tools\vgmstream\test.exe`.
+  To use another copy, set `MKW_VGMSTREAM` to its full path.
 - Collection: `%APPDATA%\CT-MKWII\Mods\Metal Kart Wii Retro Rewind` (read-only).
 
 ## Run everything

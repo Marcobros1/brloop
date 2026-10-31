@@ -824,11 +824,11 @@ static void create_controls(HWND parent)
 
     g_controls.groupSpeed = make_ctl(parent, 0, L"BUTTON", tr(STR_SPEED_GROUP),
                                 BS_GROUPBOX, 0, 0, 0, 0, 0);
-    g_controls.valSpeed = make_ctl(parent, 0, L"STATIC", L"1,00Ã—", SS_RIGHT,
+    g_controls.valSpeed = make_ctl(parent, 0, L"STATIC", tr(STR_SPEED_NORMAL), SS_RIGHT,
                               IDC_VAL_SPEED, 0, 0, 0, 0);
-    g_controls.valDevRate = make_ctl(parent, 0, L"STATIC", L"Dispositivo: â€”",
+    g_controls.valDevRate = make_ctl(parent, 0, L"STATIC", tr(STR_DEVICE_RATE_EMPTY),
                                 SS_RIGHT, IDC_VAL_DEVRATE, 0, 0, 0, 0);
-    g_controls.btnSpeed = make_ctl(parent, 0, L"BUTTON", L"1,0Ã—", 0,
+    g_controls.btnSpeed = make_ctl(parent, 0, L"BUTTON", tr(STR_SPEED_NORMAL), 0,
                               IDC_BTN_SPEED, 0, 0, 0, 0);
 
     g_controls.status = CreateWindowExW(0, STATUSCLASSNAMEW, tr(STR_STATUS_READY),
@@ -1428,10 +1428,10 @@ static int cli_add_track(void *context, const wchar_t *path,
 static void cli_report_error(void *context, const wchar_t *message)
 {
     (void)context;
-    if (wcsncmp(message, L"Ruta de --invalid", 18) == 0)
+    if (wcsncmp(message, L"Path for --invalid", 18) == 0)
         set_status(message);
     else
-        MessageBoxW(NULL, message, L"Archivo no vÃ¡lido o ilegible",
+        MessageBoxW(NULL, message, tr(STR_INVALID_FILE_TITLE),
                     MB_OK | MB_ICONWARNING);
 }
 

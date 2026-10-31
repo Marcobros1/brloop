@@ -29,7 +29,7 @@ int cli_options_parse(int argc, wchar_t **argv, CliOptions *options,
             const wchar_t *path = argv[++i];
             if (wcslen(path) >= sizeof options->invalid_path
                                       / sizeof *options->invalid_path) {
-                report(callbacks, L"Ruta de --invalid demasiado larga: ignorada.");
+                report(callbacks, L"Path for --invalid is too long: ignored.");
                 continue;
             }
             wcscpy_s(options->invalid_path,

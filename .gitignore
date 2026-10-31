@@ -20,6 +20,9 @@ core/build/
 # ---- Changelogs personales del usuario (fuera del repo) ----
 CHANGELOG.md
 CHANGELOG_INTERNAL.md
+AGENTS.md
+MEMORY.md
+
 
 # ---- Archivos operacionales del agente (no son el proyecto) ----
 production/
