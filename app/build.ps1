@@ -62,8 +62,13 @@ $lines = @(
     ('cd /d "' + $build + '"'),
     # /Fe must precede /link: after /link every token goes to the linker,
     # which ignores it and names the output after the first source file.
+    # The icon resource is compiled to a .res and linked into the window executable
+    # only. rc.exe ships with the Windows SDK, which the vcvars environment provides.
+    ('rc /nologo /fo "' + (Join-Path $build 'brloop.res') + '" "' +
+     (Join-Path $root 'src\brloop.rc') + '"'),
+    ('if errorlevel 1 exit /b 1'),
     ($playerFlags + $srcCommon + ' ' + $srcUi + ' "' +
-     (Join-Path $root 'src\main.c') + '"' +
+     (Join-Path $root 'src\main.c') + '" "' + (Join-Path $build 'brloop.res') + '"' +
      ' /Fe:brloop.exe' + $playerLink),
     ('if errorlevel 1 exit /b 1'),
     ($playerFlags + $srcCommon + ' ' + $wav + ' "' +
