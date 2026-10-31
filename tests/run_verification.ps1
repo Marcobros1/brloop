@@ -29,9 +29,9 @@ $decodeExe = Join-Path $exeDir 'brstm_decode.exe'
 $compare = Join-Path $scriptDir 'compare_pcm.py'
 $mkInvalid = Join-Path $scriptDir 'make_invalid_cases.py'
 $col = Join-Path $env:APPDATA 'CT-MKWII\Mods\Metal Kart Wii Retro Rewind'
-# vgmstream CLI, used as the reference decoder. Set MKW_VGMSTREAM to point at
-# another copy; the default assumes the LoopingAudioConverter layout.
-$vgm = if ($env:MKW_VGMSTREAM) { $env:MKW_VGMSTREAM } else { Join-Path $env:USERPROFILE 'Desktop\LoopingAudioConverter-3.2\tools\vgmstream\test.exe' }
+# vgmstream CLI, used as the reference decoder. MKW_VGMSTREAM must hold its full path.
+if (-not $env:MKW_VGMSTREAM) { throw 'Set MKW_VGMSTREAM to the full path of vgmstream test.exe' }
+$vgm = $env:MKW_VGMSTREAM
 $work = Join-Path $env:LOCALAPPDATA 'Temp\opencode\t1_verify'
 
 $script:pass = 0

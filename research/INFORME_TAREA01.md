@@ -13,11 +13,11 @@ de solo lectura).
 
 | Herramienta | Ubicación | Estado |
 |---|---|---|
-| Final Lap Stream Maker v2.0 | `Desktop\MKWIIMUSIC\Final Lap Stream Maker.exe` | Encontrado; .NET WinForms (GUI, .NET 4.5.2), se lanza y responde |
+| Final Lap Stream Maker v2.0 | `MKW_FLSM` (ruta local al ejecutable) | Encontrado; .NET WinForms (GUI, .NET 4.5.2), se lanza y responde |
 | foobar2000 | `C:\Program Files\foobar2000` | Encontrado; solo componentes de fábrica (sin componente BRSTM instalado; `foo_input_std` no lista BRSTM) |
-| LoopingAudioConverter 3.2 | `Desktop\LoopingAudioConverter-3.2` | Encontrado; incluye `tools\vgmstream\test.exe` (CLI decodificador), ffmpeg y VGAudio |
-| Colección de referencia | `...\CT-MKWII\Mods\Metal Kart Wii Retro Rewind` | 301 archivos `.brstm` + `revo_kart.brsar`; solo lectura durante todo el trabajo |
-| Copias de trabajo | `Desktop\MKWIIMUSIC\*.brstm` (13 archivos) | Verificado por SHA-256: idénticos a la colección |
+| LoopingAudioConverter 3.2 | Carpeta local de LAC | Encontrado; incluye `tools\vgmstream\test.exe` (CLI decodificador), ffmpeg y VGAudio |
+| Colección de referencia | `%APPDATA%\CT-MKWII\Mods\Metal Kart Wii Retro Rewind` (o `MKW_COLLECTION`) | 301 archivos `.brstm` + `revo_kart.brsar`; solo lectura durante todo el trabajo |
+| Copias de trabajo | Carpeta local de trabajo de FLSM | Verificado por SHA-256: idénticos a la colección |
 | Toolchain | Python 3.9, Node, .NET SDK, JDK 21, git; sin gradle ni ffmpeg en PATH | Comprobado por ejecución |
 
 Límite documentado: foobar2000 no sirvió para inspeccionar BRSTM (no tiene componente
@@ -50,7 +50,7 @@ Script: `research/brstm_inventory.py` (+ `brstm_header_probe.py`, `loop_alignmen
    speeded up version of any BRSTM/BCSTM/BFSTM" para final lap de MKW/7/8. Uso: abrir →
    guardar. Sin parámetros ni factor documentado. v1.0 2016-10-02, v2.0 2016-10-06.
 3. **Prueba de conversión (T0, ejecutada)**: conversión real sobre `5_1_N.brstm`
-   (44100 Hz) → `MKWIIMUSIC\5_1_F.brstm` (8 625 568 bytes, mismo tamaño que la entrada).
+   (44100 Hz) → `5_1_F.brstm` (carpeta de trabajo de FLSM) (8 625 568 bytes, mismo tamaño que la entrada).
    Diff binario completo (`flsm_compare.py`): **un único rango distinto: 2 bytes en
    0x64–0x65**, el campo de frecuencia 0xAC44 (44100) → 0xB800 (47104). Todo lo demás
    byte a byte idéntico: cabecera, offsets, loop flag, loop_start (3555328), total

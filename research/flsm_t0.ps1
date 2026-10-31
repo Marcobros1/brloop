@@ -4,9 +4,10 @@
 param(
     [string]$InputFile,
     [string]$OutputFile,
-    [string]$ExePath = "$env:USERPROFILE\Desktop\MKWIIMUSIC\Final Lap Stream Maker.exe"
+    [string]$ExePath = $env:MKW_FLSM
 )
 $ErrorActionPreference = 'Stop'
+if (-not $ExePath) { throw 'Set MKW_FLSM to the full path of Final Lap Stream Maker.exe, or pass -ExePath' }
 if (-not $InputFile)  { $InputFile  = Join-Path $env:LOCALAPPDATA 'Temp\opencode\flsm_exp\tKD_N.brstm' }
 if (-not $OutputFile) { $OutputFile = Join-Path $env:LOCALAPPDATA 'Temp\opencode\flsm_exp\tKD_N_flsm_out.brstm' }
 

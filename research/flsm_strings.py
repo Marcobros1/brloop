@@ -7,7 +7,9 @@ import re
 import os
 import sys
 
-PATH = os.environ.get("MKW_FLSM", os.path.join(os.path.expanduser("~"), "Desktop", "MKWIIMUSIC", "Final Lap Stream Maker.exe"))
+PATH = os.environ.get("MKW_FLSM")
+if not PATH:
+    sys.exit("flsm_strings: set MKW_FLSM to the full path of Final Lap Stream Maker.exe")
 data = open(PATH, "rb").read()
 print("exe size:", len(data))
 
