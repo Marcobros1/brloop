@@ -51,7 +51,16 @@ is only used for development.
 - Author: Atlas. Windows tool written in C#, version 2.0 (2016-10-06).
 - Source: https://mkwiiki.org/wiki/Final_Lap_Stream_Maker (checked 2026-10-31).
   The page gives author, platform, version and history. It does not state a
-  license or terms of use for the program.
+  license or terms of use for the program. The project owner searched the program
+  and its sources and found no EULA or license (reported 2026-10-31; not verified
+  independently).
+- Author's statement on file use (https://mkwiiki.org/wiki/User:Atlas, last edited
+  2026-07-03, checked 2026-10-31): "You may use any of my files for your own mods,
+  but please give proper credit and ask me for confirmation in case you want to
+  make any modification based on them." This applies to the author's files for
+  mods. It does not clearly state whether it covers the FLSM executable, so it is
+  recorded as stated, not extended. BRLoop does not copy, modify or redistribute
+  any of the author's files.
 - Use: observed behaviour only. `research/flsm_*` analyse the output file and the
   visible UI text, and `research/INFORME_TAREA01.md` documents the measured
   effect (sample-rate field change, factor 1.06812). No FLSM code or binary is
