@@ -95,6 +95,7 @@ typedef enum {
     X(STR_ENGINE_START_FAILED,  L"No se pudo iniciar el motor de reproducción.", L"Could not start the playback engine.") \
     X(STR_WINDOW_TITLE,         L"BRLoop — Reproductor BRSTM", L"BRLoop — BRSTM Player") \
     X(STR_MENU_LANGUAGE,        L"Idioma",                     L"Language") \
+    X(STR_BUTTON_LANGUAGE,      L"Idioma / Language",          L"Idioma / Language") \
     X(STR_MENU_ENGLISH,         L"English",                    L"English") \
     X(STR_MENU_SPANISH,         L"Español",                    L"Español") \
     X(STR_SETTINGS_SAVE_FAILED, L"No se pudo guardar el idioma.", L"Could not save the language.") \

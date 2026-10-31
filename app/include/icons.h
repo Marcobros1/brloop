@@ -9,8 +9,7 @@ typedef enum {
     ICON_PLAY,
     ICON_PAUSE,
     ICON_PREVIOUS,
-    ICON_NEXT,
-    ICON_LANGUAGE
+    ICON_NEXT
 } IconKind;
 
 void icons_draw(HDC dc, RECT box, IconKind kind, COLORREF color);

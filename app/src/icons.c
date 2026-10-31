@@ -81,28 +81,6 @@ static void draw_skip(HDC dc, RECT box, COLORREF color, int forward)
     }
 }
 
-/* Language: a filled globe. The meridian and the equator are cut out in the
- * button face colour so the globe reads as a globe at small sizes. */
-static void draw_language(HDC dc, RECT box, COLORREF color, COLORREF face)
-{
-    int h = box.bottom - box.top;
-    int d = h * 7 / 10;
-    int cx = box.left + (box.right - box.left) / 2;
-    int top = box.top + (h - d) / 2;
-    int left = cx - d / 2;
-    int gap = h / 12 > 0 ? h / 12 : 1;
-    HBRUSH brush = CreateSolidBrush(color);
-    HBRUSH old = (HBRUSH)SelectObject(dc, brush);
-    HPEN pen = (HPEN)GetStockObject(NULL_PEN);
-    HPEN old_pen = (HPEN)SelectObject(dc, pen);
-    Ellipse(dc, left, top, left + d, top + d);
-    SelectObject(dc, old_pen);
-    SelectObject(dc, old);
-    DeleteObject(brush);
-    fill_rect(dc, cx - gap / 2, top, gap, d, face);
-    fill_rect(dc, left, top + d / 2 - gap / 2, d, gap, face);
-}
-
 void icons_draw(HDC dc, RECT box, IconKind kind, COLORREF color)
 {
     int saved = SaveDC(dc);
@@ -112,7 +90,6 @@ void icons_draw(HDC dc, RECT box, IconKind kind, COLORREF color)
     case ICON_PAUSE:    draw_pause(dc, box, color); break;
     case ICON_PREVIOUS: draw_skip(dc, box, color, 0); break;
     case ICON_NEXT:     draw_skip(dc, box, color, 1); break;
-    case ICON_LANGUAGE: draw_language(dc, box, color, GetSysColor(COLOR_BTNFACE)); break;
     default: break;
     }
     RestoreDC(dc, saved);

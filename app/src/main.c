@@ -609,7 +609,7 @@ static void layout(void)
     int cw, ch;
     int m = 12, g = 10, statusH = 24;
     int leftW, rightX, rightW;
-    int infoH = 178, playH = 110, speedH = 100;
+    int infoH = 178, playH = 134, speedH = 100;
     int x0, col2, y;
 
     if (!g_hwnd)
@@ -675,11 +675,11 @@ static void layout(void)
     move_ctl(g_controls.btnPrevious, rightX + 12, y + 22, 84, 28);
     move_ctl(g_controls.btnPlay, rightX + 108, y + 22, 104, 28);
     move_ctl(g_controls.btnNext, rightX + 224, y + 22, 96, 28);
-    move_ctl(g_controls.btnLang, rightX + rightW - 12 - 40, y + 22, 40, 28);
     move_ctl(g_controls.progress, rightX + 12, y + 58, rightW - 24 - 176, 16);
     move_ctl(g_controls.valState, rightX + rightW - 12 - 164, y + 56, 164, 20);
     move_ctl(g_controls.valTime, rightX + 12, y + 80, 170, 18);
-    move_ctl(g_controls.checkLoop, rightX + rightW - 12 - 170, y + 78, 170, 20);
+    move_ctl(g_controls.checkLoop, rightX + 12, y + 108, 170, 20);
+    move_ctl(g_controls.btnLang, rightX + rightW - 12 - 150, y + 76, 150, 26);
 
     /* Speed: a single toggle button showing the mode in force. */
     y = m + infoH + g + playH + g;
@@ -810,8 +810,8 @@ static void create_controls(HWND parent)
                              BS_OWNERDRAW, IDC_BTN_PLAY, 0, 0, 0, 0);
     g_controls.btnNext = make_ctl(parent, 0, L"BUTTON", tr(STR_BUTTON_NEXT),
                              BS_OWNERDRAW, IDC_BTN_NEXT, 0, 0, 0, 0);
-    g_controls.btnLang = make_ctl(parent, 0, L"BUTTON", tr(STR_MENU_LANGUAGE),
-                             BS_OWNERDRAW, IDC_BTN_LANG, 0, 0, 0, 0);
+    g_controls.btnLang = make_ctl(parent, 0, L"BUTTON", tr(STR_BUTTON_LANGUAGE),
+                             0, IDC_BTN_LANG, 0, 0, 0, 0);
     g_controls.progress = make_ctl(parent, 0, PROGRESS_CLASS_NAME, L"",
                               0, IDC_PROGRESS, 0, 0, 0, 0);
     g_controls.valState = make_ctl(parent, 0, L"STATIC", L"Estado: Detenido",
@@ -1196,7 +1196,7 @@ static void relabel_controls(void)
     SetWindowTextW(g_controls.groupPlay, tr(STR_PLAY_GROUP));
     SetWindowTextW(g_controls.btnPrevious, tr(STR_BUTTON_PREVIOUS));
     SetWindowTextW(g_controls.btnNext, tr(STR_BUTTON_NEXT));
-    SetWindowTextW(g_controls.btnLang, tr(STR_MENU_LANGUAGE));
+    SetWindowTextW(g_controls.btnLang, tr(STR_BUTTON_LANGUAGE));
     SetWindowTextW(g_controls.checkLoop, tr(STR_CHECK_LOOP));
     SetWindowTextW(g_controls.groupSpeed, tr(STR_SPEED_GROUP));
     {
@@ -1340,7 +1340,6 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         case IDC_BTN_PREVIOUS: kind = ICON_PREVIOUS; break;
         case IDC_BTN_NEXT:     kind = ICON_NEXT; break;
-        case IDC_BTN_LANG:     kind = ICON_LANGUAGE; break;
         default:
             return FALSE;
         }
