@@ -1,3 +1,38 @@
+#include <winver.h>
+
 #define IDI_APP_ICON 1
+#define CREATEPROCESS_MANIFEST_RESOURCE_ID 1
+#define RT_MANIFEST_ID 24
 
 IDI_APP_ICON ICON "..\\assets\\icon\\brloop.ico"
+
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST_ID "brloop.manifest"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 0,1,0,0
+ PRODUCTVERSION 0,1,0,0
+ FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+ FILEFLAGS 0
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "Marco de Miguel Parga"
+            VALUE "FileDescription", "BRLoop BRSTM player"
+            VALUE "FileVersion", "0.1.0"
+            VALUE "InternalName", "brloop"
+            VALUE "LegalCopyright", "Copyright (C) 2026 Marco de Miguel Parga. MIT License."
+            VALUE "OriginalFilename", "brloop.exe"
+            VALUE "ProductName", "BRLoop"
+            VALUE "ProductVersion", "0.1.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END
