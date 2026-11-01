@@ -22,7 +22,6 @@ the interface is still under development.
 - Mobile-style layout: library and file information at the top, playback bar fixed at the bottom.
 - Final color palette, following the Windows system theme.
 - Motion control for the speed dial.
-- Application icon.
 - Android version.
 - Web version, sharing the playback core where the platforms allow it.
 
