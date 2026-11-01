@@ -57,10 +57,17 @@ int main(int argc, char **argv)
     uint32_t channels = 1;
     uint32_t blocks = DEFAULT_BLOCKS;
     int loop = 0;
-    uint32_t total_samples, adpc_off, data_off, data_size, file_size, adpcm_start;
-    uint8_t *buf, *head, *p1, *p3;
-    uint32_t c;
-    FILE *f;
+    uint32_t total_samples;
+    uint32_t adpc_off;
+    uint32_t data_off;
+    uint32_t data_size;
+    uint32_t file_size;
+    uint32_t adpcm_start;
+    uint8_t *buf;
+    uint8_t *head;
+    uint8_t *p1;
+    uint8_t *p3;
+    FILE *f = NULL;
 
     if (argc < 2) {
         fprintf(stderr, "usage: make_synthetic_brstm <out.brstm> [channels 1..4] "
@@ -135,7 +142,7 @@ int main(int argc, char **argv)
     /* Part 3: channel count, one 8-byte entry per channel, then the infos. */
     p3 = head + 8 + PART3_REL;
     p3[0] = (uint8_t)channels;
-    for (c = 0; c < channels; c++) {
+    for (uint32_t c = 0; c < channels; c++) {
         uint8_t *entry = p3 + 4 + 8 * c;
         uint32_t info_rel = CHANNEL_INFO_0 + CHANNEL_INFO_STEP * c;
         uint8_t *info = head + 8 + info_rel;
@@ -154,7 +161,9 @@ int main(int argc, char **argv)
     w32(buf + data_off + 4, data_size);
     w32(buf + data_off + 8, DATA_HEADER_SIZE);
 
-    f = fopen(argv[1], "wb");
+    if (fopen_s(&f, argv[1], "wb") != 0) {
+        f = NULL;
+    }
     if (!f) {
         fprintf(stderr, "cannot write %s\n", argv[1]);
         free(buf);
