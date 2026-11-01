@@ -61,14 +61,20 @@ jobs:
           New-Item -ItemType Directory -Force -Path $dbg | Out-Null
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           $bat = Join-Path $cov 'debug.bat'
-          $src = 'core\src\brstm.c core\src\dsp_adpcm.c app\src\player.c app\src\audio_out.c app\src\cli_options.c app\src\library.c app\src\transport.c app\src\resampler.c app\src\strings.c app\src\settings.c app\src\ui_selftest.c app\src\icons.c app\src\main.c'
+          $srcFiles = @(
+            'core\src\brstm.c', 'core\src\dsp_adpcm.c', 'app\src\player.c', 'app\src\audio_out.c',
+            'app\src\cli_options.c', 'app\src\library.c', 'app\src\transport.c', 'app\src\resampler.c',
+            'app\src\strings.c', 'app\src\settings.c', 'app\src\ui_selftest.c', 'app\src\icons.c',
+            'app\src\main.c'
+          ) | ForEach-Object { '"' + (Join-Path $root $_) + '"' }
+          $srcArgs = $srcFiles -join ' '
           @(
             '@echo off',
             "call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul 2>&1",
             'if errorlevel 1 exit /b 1',
             "cd /d `"$dbg`"",
             "rc /nologo /fo brloop.res `"$root\app\src\brloop.rc`"",
-            "cl /nologo /W4 /WX /O2 /Zi /utf-8 /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /I`"$root\core\include`" /I`"$root\app\include`" $($src.Split(' ') | ForEach-Object { "`"$root\$_`"" }) brloop.res /Fe:brloop.exe /Fd:brloop.pdb /link user32.lib gdi32.lib shell32.lib winmm.lib comctl32.lib comdlg32.lib psapi.lib",
+            "cl /nologo /W4 /WX /O2 /Zi /utf-8 /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /I`"$root\core\include`" /I`"$root\app\include`" $srcArgs brloop.res /Fe:brloop.exe /Fd:brloop.pdb /link user32.lib gdi32.lib shell32.lib winmm.lib comctl32.lib comdlg32.lib psapi.lib",
             'exit /b %errorlevel%'
           ) | Set-Content -Path $bat -Encoding Ascii
           cmd /c "`"$bat`""
