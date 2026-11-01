@@ -109,7 +109,8 @@ jobs:
           $oc = Join-Path $env:ProgramFiles 'OpenCppCoverage\OpenCppCoverage.exe'
           & $oc --modules "$dbg*" --sources "$root\app\src*" --export_type "cobertura:$xml" -- (Join-Path $dbg 'brloop.exe') --selftest $stereo $quad --invalid $bad --report $report
           $selftest = $LASTEXITCODE
-          Get-Content $report | Select-Object -Last 1
+          # Print the whole report so a failing check is visible in the log.
+          Get-Content $report
           if ($selftest -ne 0) { throw "window self-test failed ($selftest)" }
           if (-not (Test-Path $xml)) { throw 'coverage report was not written' }
 
