@@ -86,8 +86,16 @@ jobs:
 
           # Synthetic inputs: a stereo track and a 4-channel track, plus a file that must be rejected.
           $gen = Join-Path $cov 'make_synthetic_brstm.exe'
-          & cl /nologo /W4 /WX /O2 /D_CRT_SECURE_NO_WARNINGS (Join-Path $root 'core\tests\make_synthetic_brstm.c') "/Fe:$gen" | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "generator build failed" }
+          $genBat = Join-Path $cov 'generator.bat'
+          @(
+            '@echo off',
+            "call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul 2>&1",
+            'if errorlevel 1 exit /b 1',
+            "cl /nologo /W4 /WX /O2 /D_CRT_SECURE_NO_WARNINGS `"$root\core\tests\make_synthetic_brstm.c`" /Fe:`"$gen`" >nul",
+            'exit /b %errorlevel%'
+          ) | Set-Content -Path $genBat -Encoding Ascii
+          cmd /c "`"$genBat`""
+          if ($LASTEXITCODE -ne 0) { throw "generator build failed ($LASTEXITCODE)" }
           $stereo = Join-Path $cov 'stereo.brstm'
           $quad = Join-Path $cov 'quad.brstm'
           $bad = Join-Path $cov 'bad.brstm'
