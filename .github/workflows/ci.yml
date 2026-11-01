@@ -107,8 +107,13 @@ jobs:
           $report = Join-Path $cov 'selftest.txt'
           $xml = Join-Path $cov 'coverage.xml'
           $oc = Join-Path $env:ProgramFiles 'OpenCppCoverage\OpenCppCoverage.exe'
-          & $oc --modules "$dbg*" --sources "$root\app\src*" --export_type "cobertura:$xml" -- (Join-Path $dbg 'brloop.exe') --selftest $stereo $quad --invalid $bad --report $report
+          # OpenCppCoverage returns the exit code of the measured program. Under
+          # $ErrorActionPreference = 'Stop' a native non-zero code would stop the
+          # step before the warning below, so read the code without that rule.
+          $ErrorActionPreference = 'Continue'
+          & $oc --modules "$dbg*" --sources "$root\app\src*" --export_type "cobertura:$xml" -- (Join-Path $dbg 'brloop.exe') --selftest $stereo $quad --invalid $bad --report $report | Out-Null
           $selftest = $LASTEXITCODE
+          $ErrorActionPreference = 'Stop'
           # Print the whole report so a failing check is visible in the log.
           Get-Content $report
           # The GitHub runner has no audio device (waveOutGetNumDevs = 0), so the
