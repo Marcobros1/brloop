@@ -85,6 +85,7 @@ static void st_logf(const char *fmt, ...)
     va_start(ap, fmt);
     vsnprintf(line, sizeof line, fmt, ap);
     va_end(ap);
+    /* Print the formatted text through a literal format, never the variable one. */
     printf("%s", line);
     fflush(stdout);
     if (g_test->report) {

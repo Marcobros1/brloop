@@ -484,6 +484,12 @@ static void test_speed_chain(void)
     s = player_get_state(p);
     step = resampler_step(s.sample_rate, player_device_rate(s.sample_rate, PLAYER_FLSM_SPEED_PPM));
 
+    /* An empty 1.0x render would make the allocations below zero-sized. */
+    if (total == 0) {
+        check(0, "1.0x reference rendered no samples");
+        free(ref); player_destroy(p);
+        return;
+    }
     eng = (int16_t *)malloc(total * 2 * sizeof(int16_t));
     if (!eng) { check(0, "allocate FLSM render"); free(ref); player_destroy(p); return; }
     player_play(p);
@@ -501,8 +507,15 @@ static void test_speed_chain(void)
     {
         SpeedSource src;
         Resampler r;
-        int16_t *flsm = (int16_t *)malloc(eng_n * 2 * sizeof(int16_t));
+        int16_t *flsm;
         size_t got;
+        if (eng_n == 0) {
+            check(0, "FLSM render produced no samples");
+            free(ref);
+            free(eng);
+            return;
+        }
+        flsm = (int16_t *)malloc(eng_n * 2 * sizeof(int16_t));
         if (!flsm) {
             check(0, "allocate reference resample");
             free(ref);

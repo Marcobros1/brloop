@@ -1214,6 +1214,8 @@ static void relabel_controls(void)
         memset(&col, 0, sizeof col);
         col.mask = LVCF_TEXT;
         for (i = 0; i < 5; i++) {
+            /* LVCOLUMNW.pszText is not const, but ListView_SetColumn only reads
+             * the text; the cast satisfies the Win32 signature. */
             col.pszText = (wchar_t *)names[i];
             ListView_SetColumn(g_controls.list, i, &col);
         }
