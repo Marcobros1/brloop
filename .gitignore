@@ -34,6 +34,7 @@ opencode*.json
 t1_verify/
 t2_work/
 t2_verify/
+coverage/
 *_report.txt
 
 # ---- Paquetes de release y dumps (se generan, no se versionan) ----
