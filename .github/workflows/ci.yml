@@ -106,6 +106,10 @@ jobs:
           $env:MKW_SETTINGS_DIR = Join-Path $cov 'settings'
           # The runner has no sound card: run the audio path with silence.
           $env:MKW_SILENT_AUDIO = '1'
+          # Diagnostic: count the wave-out devices Windows reports on this runner.
+          Add-Type -Namespace W -Name Mm -MemberDefinition '[DllImport("winmm.dll")] public static extern uint waveOutGetNumDevs();'
+          "waveOutGetNumDevs=" + [W.Mm]::waveOutGetNumDevs()
+          Get-CimInstance Win32_SoundDevice | ForEach-Object { "sound device: " + $_.Name + " status=" + $_.Status }
           $report = Join-Path $cov 'selftest.txt'
           $xml = Join-Path $cov 'coverage.xml'
           $oc = Join-Path $env:ProgramFiles 'OpenCppCoverage\OpenCppCoverage.exe'
