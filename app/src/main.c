@@ -599,7 +599,7 @@ static void move_ctl(HWND h, int x, int y, int w, int hh)
 
 /* Recompute every control position from the client size. Called on
  * WM_SIZE and once after creation. Fixed pixel geometry (no auto-scale):
- * the window enforces a 760x504 minimum in WM_GETMINMAXINFO, and the
+ * the window enforces a 760x560 minimum in WM_GETMINMAXINFO, and the
  * layout is simple enough that proportional scaling would add complexity
  * without visible benefit at this stage. Left column = library (width
  * clamped 330..440), right column = info / transport / speed panels. */
@@ -608,8 +608,8 @@ static void layout(void)
     RECT rc;
     int cw, ch;
     int m = 12, g = 10, statusH = 24;
-    int leftW, rightX, rightW;
-    int infoH = 178, playH = 134, speedH = 100;
+    int leftW, rightX, rightW, topH;
+    int infoH = 178, playH = 134;
     int x0, col2, y;
 
     if (!g_hwnd)
@@ -630,16 +630,19 @@ static void layout(void)
     x0 = rightX + 12;
     col2 = rightX + rightW / 2 + 2;
 
-    /* Library (left column). */
-    move_ctl(g_controls.groupLib, m, m, leftW, ch - statusH - 2 * m);
+    /* Top area: library and file info. The playback bar takes the full width
+     * at the bottom, so the top area ends above it. */
+    topH = ch - statusH - 2 * m - playH - g;
+
+    /* Library (left column, top area). */
+    move_ctl(g_controls.groupLib, m, m, leftW, topH);
     move_ctl(g_controls.btnOpen, m + 12, m + 22, 96, 26);
     move_ctl(g_controls.btnRemove, m + 116, m + 22, 84, 26);
     move_ctl(g_controls.btnClear, m + 208, m + 22, 84, 26);
-    move_ctl(g_controls.list, m + 12, m + 56, leftW - 24,
-             ch - statusH - 2 * m - 56 - 12);
+    move_ctl(g_controls.list, m + 12, m + 56, leftW - 24, topH - 56 - 12);
 
-    /* Information panel. */
-    move_ctl(g_controls.groupInfo, rightX, m, rightW, infoH);
+    /* Information panel (right column, top area). */
+    move_ctl(g_controls.groupInfo, rightX, m, rightW, topH);
     y = m + 22;
     move_ctl(g_controls.capName, x0, y, 84, 18);
     move_ctl(g_controls.valName, x0 + 88, y, rightW / 2 - 104, 18);
@@ -668,25 +671,29 @@ static void layout(void)
     move_ctl(g_controls.capPath, x0, y, 84, 18);
     move_ctl(g_controls.valPath, x0 + 88, y, rightW - 104, 20);
 
-    /* Transport: one play/pause button (96+ px so "Reproducir" fits),
-     * previous-track and next-track beside it. */
-    y = m + infoH + g;
-    move_ctl(g_controls.groupPlay, rightX, y, rightW, playH);
-    move_ctl(g_controls.btnPrevious, rightX + 12, y + 22, 84, 28);
-    move_ctl(g_controls.btnPlay, rightX + 108, y + 22, 104, 28);
-    move_ctl(g_controls.btnNext, rightX + 224, y + 22, 96, 28);
-    move_ctl(g_controls.progress, rightX + 12, y + 58, rightW - 24 - 176, 16);
-    move_ctl(g_controls.valState, rightX + rightW - 12 - 164, y + 56, 164, 20);
-    move_ctl(g_controls.valTime, rightX + 12, y + 80, 170, 18);
-    move_ctl(g_controls.checkLoop, rightX + 12, y + 108, 170, 20);
-    move_ctl(g_controls.btnLang, rightX + rightW - 12 - 150, y + 76, 150, 26);
+    /* Bottom bar, full width: transport, progress, state, loop and speed.
+     * Play/pause (96+ px so "Reproducir" fits) sits between previous and
+     * next, as before. */
+    y = ch - statusH - m - playH;
+    move_ctl(g_controls.groupPlay, m, y, cw - 2 * m, playH);
+    /* Previous, play and next form one row (84 + 12 + 104 + 12 + 96 = 308 px),
+     * centred in the box. */
+    x0 = m + ((cw - 2 * m) - 308) / 2;
+    move_ctl(g_controls.btnPrevious, x0, y + 22, 84, 28);
+    move_ctl(g_controls.btnPlay, x0 + 96, y + 22, 104, 28);
+    move_ctl(g_controls.btnNext, x0 + 212, y + 22, 96, 28);
+    move_ctl(g_controls.progress, m + 12, y + 58, cw - 2 * m - 24 - 176, 16);
+    move_ctl(g_controls.valState, cw - m - 12 - 164, y + 56, 164, 20);
+    move_ctl(g_controls.valTime, m + 12, y + 80, 170, 18);
+    move_ctl(g_controls.checkLoop, m + 12, y + 108, 170, 20);
+    move_ctl(g_controls.btnLang, cw - m - 12 - 150, y + 76, 150, 26);
 
-    /* Speed: a single toggle button showing the mode in force. */
-    y = m + infoH + g + playH + g;
-    move_ctl(g_controls.groupSpeed, rightX, y, rightW, speedH);
+    /* Speed: sits in the top-right column under the file info. */
+    y = m + infoH + g;
+    move_ctl(g_controls.groupSpeed, rightX, y, rightW, topH - infoH - g);
     move_ctl(g_controls.valSpeed, rightX + 12, y + 28, 84, 20);
     move_ctl(g_controls.valDevRate, rightX + rightW - 12 - 170, y + 28, 170, 20);
-    move_ctl(g_controls.btnSpeed, rightX + 12, y + 60, 200, 26);
+    move_ctl(g_controls.btnSpeed, rightX + (rightW - 200) / 2, y + 60, 200, 26);
 }
 
 /* ------------------------------------------------------------ creation -- */
@@ -1297,7 +1304,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_GETMINMAXINFO: {
         MINMAXINFO *mm = (MINMAXINFO *)lp;
         mm->ptMinTrackSize.x = 760;
-        mm->ptMinTrackSize.y = 504;
+        mm->ptMinTrackSize.y = 560;
         return 0;
     }
 

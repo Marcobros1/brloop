@@ -40,6 +40,91 @@ jobs:
         shell: pwsh
         run: powershell -ExecutionPolicy Bypass -File app\build.ps1
 
+      # Coverage for SonarQube: the window self-test runs against a synthetic
+      # BRSTM (no reference collection needed) under OpenCppCoverage, which
+      # exports Cobertura XML. The PDB comes from a separate debug build so that
+      # app\build (the shipped binary) stays unchanged.
+      - name: Install OpenCppCoverage
+        shell: pwsh
+        run: choco install opencppcoverage --version 0.9.9 -y --no-progress
+
+      - name: Measure coverage of the window self-test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = (Get-Location).Path
+          $cov = Join-Path $root 'coverage'
+          New-Item -ItemType Directory -Force -Path $cov | Out-Null
+
+          # Debug build with PDB, same sources and flags as app\build.ps1.
+          $dbg = Join-Path $cov 'debug'
+          New-Item -ItemType Directory -Force -Path $dbg | Out-Null
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $bat = Join-Path $cov 'debug.bat'
+          $srcFiles = @(
+            'core\src\brstm.c', 'core\src\dsp_adpcm.c', 'app\src\player.c', 'app\src\audio_out.c',
+            'app\src\cli_options.c', 'app\src\library.c', 'app\src\transport.c', 'app\src\resampler.c',
+            'app\src\strings.c', 'app\src\settings.c', 'app\src\ui_selftest.c', 'app\src\icons.c',
+            'app\src\main.c'
+          ) | ForEach-Object { '"' + (Join-Path $root $_) + '"' }
+          $srcArgs = $srcFiles -join ' '
+          @(
+            '@echo off',
+            "call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul 2>&1",
+            'if errorlevel 1 exit /b 1',
+            "cd /d `"$dbg`"",
+            "rc /nologo /fo brloop.res `"$root\app\src\brloop.rc`"",
+            "cl /nologo /W4 /WX /O2 /Zi /utf-8 /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /I`"$root\core\include`" /I`"$root\app\include`" $srcArgs brloop.res /Fe:brloop.exe /Fd:brloop.pdb /link user32.lib gdi32.lib shell32.lib winmm.lib comctl32.lib comdlg32.lib psapi.lib",
+            'exit /b %errorlevel%'
+          ) | Set-Content -Path $bat -Encoding Ascii
+          cmd /c "`"$bat`""
+          if ($LASTEXITCODE -ne 0) { throw "debug build failed ($LASTEXITCODE)" }
+
+          # The UI font is loaded from assets\fonts next to the executable.
+          New-Item -ItemType Directory -Force -Path (Join-Path $dbg 'assets\fonts') | Out-Null
+          Copy-Item -Path (Join-Path $root 'app\assets\fonts\*') -Destination (Join-Path $dbg 'assets\fonts') -Force
+
+          # Synthetic inputs: a stereo track and a 4-channel track, plus a file that must be rejected.
+          $gen = Join-Path $cov 'make_synthetic_brstm.exe'
+          $genBat = Join-Path $cov 'generator.bat'
+          @(
+            '@echo off',
+            "call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul 2>&1",
+            'if errorlevel 1 exit /b 1',
+            "cl /nologo /W4 /WX /O2 /D_CRT_SECURE_NO_WARNINGS `"$root\core\tests\make_synthetic_brstm.c`" /Fe:`"$gen`" >nul",
+            'exit /b %errorlevel%'
+          ) | Set-Content -Path $genBat -Encoding Ascii
+          cmd /c "`"$genBat`""
+          if ($LASTEXITCODE -ne 0) { throw "generator build failed ($LASTEXITCODE)" }
+          $stereo = Join-Path $cov 'stereo.brstm'
+          $quad = Join-Path $cov 'quad.brstm'
+          $bad = Join-Path $cov 'bad.brstm'
+          & $gen $stereo 2 0 40
+          & $gen $quad 4 0 40
+          [IO.File]::WriteAllBytes($bad, [byte[]](0, 1, 2, 3))
+
+          $env:MKW_SETTINGS_DIR = Join-Path $cov 'settings'
+          $report = Join-Path $cov 'selftest.txt'
+          $xml = Join-Path $cov 'coverage.xml'
+          $oc = Join-Path $env:ProgramFiles 'OpenCppCoverage\OpenCppCoverage.exe'
+          # OpenCppCoverage returns the exit code of the measured program. Under
+          # $ErrorActionPreference = 'Stop' a native non-zero code would stop the
+          # step before the warning below, so read the code without that rule.
+          $ErrorActionPreference = 'Continue'
+          & $oc --modules "$dbg*" --sources "$root\app\src*" --export_type "cobertura:$xml" -- (Join-Path $dbg 'brloop.exe') --selftest $stereo $quad --invalid $bad --report $report | Out-Null
+          $selftest = $LASTEXITCODE
+          $ErrorActionPreference = 'Stop'
+          # Print the whole report so a failing check is visible in the log.
+          Get-Content $report
+          # The GitHub runner has no audio device (waveOutGetNumDevs = 0), so the
+          # playback checks cannot pass here. The window checks still run and the
+          # coverage is still measured, so only warn; a missing report is fatal.
+          if ($selftest -ne 0) { Write-Host "::warning::window self-test reported failures on this runner (no audio device); coverage still measured" }
+          if (-not (Test-Path $xml)) { throw 'coverage report was not written' }
+          # Finish with an explicit success: the last native command above returns
+          # the measured program's exit code, which must not fail this step.
+          exit 0
+
       - name: Cache SonarQube packages
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -51,6 +136,9 @@ jobs:
         uses: SonarSource/sonarqube-scan-action@4d1dc0c91ee400dcf8a6dddf2f705ac36542e304 # v8.4.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.cfamily.cobertura.reportPaths=coverage/coverage.xml
 
       - name: Remove build intermediates
         if: always()
