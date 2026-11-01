@@ -121,6 +121,9 @@ jobs:
           # coverage is still measured, so only warn; a missing report is fatal.
           if ($selftest -ne 0) { Write-Host "::warning::window self-test reported failures on this runner (no audio device); coverage still measured" }
           if (-not (Test-Path $xml)) { throw 'coverage report was not written' }
+          # Finish with an explicit success: the last native command above returns
+          # the measured program's exit code, which must not fail this step.
+          exit 0
 
       - name: Cache SonarQube packages
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
