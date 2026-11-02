@@ -71,14 +71,31 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cat > notes.md <<EOF
-          Built by CI from commit ${GITHUB_SHA} on main.
+          # Find the previous version tag to build a changelog
+          prev_tag=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || git tag --sort=-v:refname | grep '^v' | grep -v "$GITHUB_REF_NAME" | head -n1)
 
+          cat > notes.md <<EOF
+          # BRLoop $GITHUB_REF_NAME
+
+          Built by CI from commit ${GITHUB_SHA} on main.
+          EOF
+
+          if [ -n "$prev_tag" ]; then
+            echo "## Changes since $prev_tag" >> notes.md
+            git log ${prev_tag}..HEAD --pretty=format:"- %s" >> notes.md
+          else
+            echo "## Changes" >> notes.md
+            git log --pretty=format:"- %s" >> notes.md
+          fi
+          echo "" >> notes.md
+
+          cat >> notes.md <<EOF
           SHA-256 of $(basename "${{ steps.hash.outputs.zip }}"): ${{ steps.hash.outputs.sha }}
 
           Build provenance is attested by GitHub Actions; verify with
           \`gh attestation verify <zip> --repo ${GITHUB_REPOSITORY}\`.
           EOF
+
           gh release create "$GITHUB_REF_NAME" "${{ steps.hash.outputs.zip }}" \
             --repo "$GITHUB_REPOSITORY" --verify-tag --title "BRLoop $GITHUB_REF_NAME" \
             --notes-file notes.md
