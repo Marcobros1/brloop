@@ -80,6 +80,16 @@ jobs:
           Built by CI from commit ${GITHUB_SHA} on main.
           EOF
 
+          # Optional custom notes per version: docs/release_notes/<version>.md
+          version="${{ steps.version.outputs.version }}"
+          custom="docs/release_notes/${version}.md"
+          if [ -f "$custom" ]; then
+            echo "" >> notes.md
+            echo "## Notes" >> notes.md
+            cat "$custom" >> notes.md
+            echo "" >> notes.md
+          fi
+
           if [ -n "$prev_tag" ]; then
             echo "## Changes since $prev_tag" >> notes.md
             git log ${prev_tag}..HEAD --pretty=format:"- %s" >> notes.md
