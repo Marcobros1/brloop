@@ -49,7 +49,7 @@ $srcUi = '"' + (Join-Path $root 'src\ui_selftest.c') + '" "' + (Join-Path $root 
 # and the open-file dialog.
 $playerFlags = 'cl /nologo /W4 /WX /O2 /utf-8 /D_CRT_SECURE_NO_WARNINGS ' +
                '/DUNICODE /D_UNICODE /I"' + $incCore + '" /I"' + $incApp + '" '
-$playerLink = ' /link user32.lib gdi32.lib shell32.lib winmm.lib comctl32.lib comdlg32.lib psapi.lib'
+$playerLink = ' /link user32.lib gdi32.lib shell32.lib winmm.lib comctl32.lib comdlg32.lib psapi.lib uxtheme.lib advapi32.lib'
 $testLink = ' /link winmm.lib psapi.lib'
 $wav = '"' + (Join-Path $core 'src\wav_writer.c') + '"'
 
@@ -70,6 +70,7 @@ $lines = @(
     ($playerFlags + $srcCommon + ' ' + $srcUi + ' "' +
      (Join-Path $root 'src\main.c') + '" "' + (Join-Path $build 'brloop.res') + '"' +
      ' /Fe:brloop.exe' + $playerLink),
+    ('echo CL=%errorlevel%'),
     ('if errorlevel 1 exit /b 1'),
     ($playerFlags + $srcCommon + ' ' + $wav + ' "' +
      (Join-Path $root 'tests\player_tests.c') + '"' +
@@ -79,10 +80,16 @@ $lines = @(
 $bat = Join-Path $build 'build.bat'
 Set-Content -Path $bat -Value $lines -Encoding Ascii
 
-& cmd /c "`"$bat`""
+$out = & $env:ComSpec /d /c "`"$bat`"" 2>&1
+Write-Output $out
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Compilation failed (exit $LASTEXITCODE)"
     exit $LASTEXITCODE
+}
+$exe = Join-Path $build 'brloop.exe'
+if (-not (Test-Path $exe)) {
+    Write-Error "brloop.exe no se generó en $build"
+    exit 1
 }
 Remove-Item -Path $bat -Force
 # The interface font is loaded from assets\fonts next to the executable, so the

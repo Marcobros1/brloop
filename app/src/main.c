@@ -13,14 +13,19 @@
  */
 #include <windows.h>
 #include <commctrl.h>
+#include <uxtheme.h>
 #include <commdlg.h>
 #include <psapi.h>
+#include <winreg.h>
 
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
+
+/* RegGetValueW is in advapi32.lib. */
+#pragma comment(lib, "advapi32.lib")
 
 #include "player.h"
 #include "ui_types.h"
@@ -45,7 +50,37 @@ static Controls g_controls;      /* every child control handle, filled once */
 #define UI_FONT_FILE L"assets\\fonts\\PixelifySans.ttf"
 static HFONT g_font;        /* shared UI font for all controls */
 static int g_font_loaded;
-static HBRUSH g_brushFace;  /* group-box background brush */
+static HBRUSH g_brushFace;  /* group-box background */
+static HBRUSH g_brushBg;    /* client area background */
+static HBRUSH g_brushBorde; /* control borders */
+static ThemeChoice g_theme_choice = THEME_SYSTEM; /* user's saved choice */
+static int g_ui_theme_dark; /* 1 = dark theme in force */
+
+/* Dark when Windows apps use the dark colour mode. Reads
+ * HKCU\...\Themes\Personalize AppsUseLightTheme (0 = dark, 1 = light).
+ * Missing key or read error = light. */
+static int system_theme_is_dark(void)
+{
+    DWORD val = 1;            /* default: light theme */
+    DWORD size = sizeof val;
+    LSTATUS st = RegGetValueW(HKEY_CURRENT_USER,
+                              L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                              L"AppsUseLightTheme",
+                              RRF_RT_REG_DWORD, NULL, &val, &size);
+    if (st != ERROR_SUCCESS)
+        return 0;             /* light when the value cannot be read */
+    return val == 0;          /* 0 = dark, 1 = light */
+}
+
+/* Works out the theme in force from the saved choice. */
+static int theme_is_dark_for(ThemeChoice choice)
+{
+    if (choice == THEME_LIGHT)
+        return 0;
+    if (choice == THEME_DARK)
+        return 1;
+    return system_theme_is_dark();
+}
 static Player *g_player;    /* engine; created in wWinMain, destroyed in
                              * WM_DESTROY (so every exit path is covered by
                              * the window lifetime) */
@@ -463,6 +498,8 @@ static HBRUSH   g_brushProgMarker; /* loop start line */
 
 static void update_ui(void);
 static void set_language(StrLanguage lang);
+static void show_theme_menu(HWND owner);
+static void set_theme(ThemeChoice choice);
 static void show_language_menu(HWND owner);
 
 /* Seek: click (or drag end) on the bar jumps to that source position. */
@@ -513,8 +550,8 @@ static LRESULT CALLBACK progress_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         GetClientRect(hwnd, &rc);
         w = rc.right - rc.left;
         h = rc.bottom - rc.top;
-        FillRect(dc, &rc, GetSysColorBrush(COLOR_WINDOW));
-        FrameRect(dc, &rc, GetSysColorBrush(COLOR_3DSHADOW));
+        FillRect(dc, &rc, g_brushBg);
+        FrameRect(dc, &rc, g_brushBorde);
         if (g_progress_total > 0 && w > 2 && h > 2) {
             int span = w - 2;
             int loop_x = -1;
@@ -547,7 +584,7 @@ static LRESULT CALLBACK progress_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             int dx = g_progress_drag_x < 1 ? 1 : g_progress_drag_x;
             if (dx > w - 2) dx = w - 2;
             RECT dr = { dx - 1, 0, dx + 1, h };
-            FillRect(dc, &dr, GetSysColorBrush(COLOR_3DDKSHADOW));
+            FillRect(dc, &dr, g_brushProgFill);
         }
         EndPaint(hwnd, &ps);
         return 0;
@@ -687,6 +724,7 @@ static void layout(void)
     move_ctl(g_controls.valTime, m + 12, y + 80, 170, 18);
     move_ctl(g_controls.checkLoop, m + 12, y + 108, 170, 20);
     move_ctl(g_controls.btnLang, cw - m - 12 - 150, y + 76, 150, 26);
+    move_ctl(g_controls.btnTheme, cw - m - 12 - 150, y + 104, 150, 26);
 
     /* Speed: sits in the top-right column under the file info. */
     y = m + infoH + g;
@@ -732,16 +770,22 @@ static void create_controls(HWND parent)
     g_controls.groupLib = make_ctl(parent, 0, L"BUTTON", tr(STR_LIBRARY_GROUP),
                               BS_GROUPBOX, 0, 0, 0, 0, 0);
     g_controls.btnOpen = make_ctl(parent, 0, L"BUTTON", tr(STR_BUTTON_OPEN),
-                             0, IDC_BTN_OPEN, 0, 0, 0, 0);
+                             WS_TABSTOP, IDC_BTN_OPEN, 0, 0, 0, 0);
     g_controls.btnRemove = make_ctl(parent, 0, L"BUTTON", tr(STR_BUTTON_REMOVE),
-                               0, IDC_BTN_REMOVE, 0, 0, 0, 0);
+                               WS_TABSTOP, IDC_BTN_REMOVE, 0, 0, 0, 0);
     g_controls.btnClear = make_ctl(parent, 0, L"BUTTON", tr(STR_BUTTON_CLEAR),
-                              0, IDC_BTN_CLEAR, 0, 0, 0, 0);
+                              WS_TABSTOP, IDC_BTN_CLEAR, 0, 0, 0, 0);
     g_controls.list = make_ctl(parent, WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
-                          LVS_REPORT | LVS_SHOWSELALWAYS, IDC_LIST,
+                          LVS_REPORT | LVS_SHOWSELALWAYS | WS_TABSTOP, IDC_LIST,
                           0, 0, 0, 0);
     ListView_SetExtendedListViewStyle(g_controls.list,
         LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+    /* Drop the Windows visual theme on the list so the palette colours apply.
+     * The header keeps the Windows style (documented exception). */
+    SetWindowTheme(g_controls.list, L"", L"");
+    ListView_SetBkColor(g_controls.list, UI_C_SUPERFICIE);
+    ListView_SetTextBkColor(g_controls.list, UI_C_SUPERFICIE);
+    ListView_SetTextColor(g_controls.list, UI_C_PRIMARIO);
 
     memset(&col, 0, sizeof col);
     col.mask = LVCF_FMT | LVCF_WIDTH | LVCF_TEXT;
@@ -782,7 +826,7 @@ static void create_controls(HWND parent)
     g_controls.valName = make_ctl(parent, 0, L"STATIC", L"\u2014", 0,
                              IDC_VAL_NAME, 0, 0, 0, 0);
     g_controls.valPath = make_ctl(parent, WS_EX_CLIENTEDGE, L"EDIT", L"",
-                             ES_READONLY | ES_AUTOHSCROLL, IDC_VAL_PATH,
+                             ES_READONLY | ES_AUTOHSCROLL | WS_TABSTOP, IDC_VAL_PATH,
                              0, 0, 0, 0);
     g_controls.valRate = make_ctl(parent, 0, L"STATIC", L"\u2014", 0,
                              IDC_VAL_RATE, 0, 0, 0, 0);
@@ -800,7 +844,7 @@ static void create_controls(HWND parent)
                                 IDC_VAL_LOOPEND, 0, 0, 0, 0);
     g_controls.capVer = make_ctl(parent, 0, L"STATIC", tr(STR_CAP_VERSION), 0,
                             IDC_CAP_VER, 0, 0, 0, 0);
-    g_controls.btnPair = make_ctl(parent, 0, L"BUTTON", L"\u2014", 0,
+    g_controls.btnPair = make_ctl(parent, 0, L"BUTTON", L"\u2014", BS_OWNERDRAW | WS_TABSTOP,
                              IDC_BTN_PAIR, 0, 0, 0, 0);
 
     g_controls.groupPlay = make_ctl(parent, 0, L"BUTTON", tr(STR_PLAY_GROUP),
@@ -812,13 +856,18 @@ static void create_controls(HWND parent)
     /* Owner-drawn: the glyph comes from icons.c and the caption stays as the
      * accessible name, so screen readers and the tooltip still get the word. */
     g_controls.btnPrevious = make_ctl(parent, 0, L"BUTTON", tr(STR_BUTTON_PREVIOUS),
-                             BS_OWNERDRAW, IDC_BTN_PREVIOUS, 0, 0, 0, 0);
+                             BS_OWNERDRAW | WS_TABSTOP, IDC_BTN_PREVIOUS, 0, 0, 0, 0);
     g_controls.btnPlay = make_ctl(parent, 0, L"BUTTON", tr(STR_BUTTON_PLAY),
-                             BS_OWNERDRAW, IDC_BTN_PLAY, 0, 0, 0, 0);
+                             BS_OWNERDRAW | WS_TABSTOP, IDC_BTN_PLAY, 0, 0, 0, 0);
     g_controls.btnNext = make_ctl(parent, 0, L"BUTTON", tr(STR_BUTTON_NEXT),
-                             BS_OWNERDRAW, IDC_BTN_NEXT, 0, 0, 0, 0);
+                             BS_OWNERDRAW | WS_TABSTOP, IDC_BTN_NEXT, 0, 0, 0, 0);
+    g_controls.btnTheme = make_ctl(parent, 0, L"BUTTON", tr(STR_BUTTON_THEME),
+                              BS_OWNERDRAW | WS_TABSTOP, IDC_BTN_THEME, 0, 0, 0, 0);
     g_controls.btnLang = make_ctl(parent, 0, L"BUTTON", tr(STR_BUTTON_LANGUAGE),
-                             0, IDC_BTN_LANG, 0, 0, 0, 0);
+                             BS_OWNERDRAW | WS_TABSTOP, IDC_BTN_LANG, 0, 0, 0, 0);
+    SetWindowTheme(g_controls.btnTheme, L"", L"");
+    SetWindowTheme(g_controls.btnLang, L"", L"");
+    SetWindowTheme(g_controls.btnPair, L"", L"");
     g_controls.progress = make_ctl(parent, 0, PROGRESS_CLASS_NAME, L"",
                               0, IDC_PROGRESS, 0, 0, 0, 0);
     g_controls.valState = make_ctl(parent, 0, L"STATIC", L"Estado: Detenido",
@@ -826,7 +875,7 @@ static void create_controls(HWND parent)
     g_controls.valTime = make_ctl(parent, 0, L"STATIC", L"0:00.000 / 0:00.000",
                              0, IDC_VAL_TIME, 0, 0, 0, 0);
     g_controls.checkLoop = make_ctl(parent, 0, L"BUTTON", tr(STR_CHECK_LOOP),
-                               BS_AUTOCHECKBOX | BS_LEFT, IDC_CHECK_LOOP,
+                               BS_AUTOCHECKBOX | BS_LEFT | WS_TABSTOP, IDC_CHECK_LOOP,
                                0, 0, 0, 0);
 
     g_controls.groupSpeed = make_ctl(parent, 0, L"BUTTON", tr(STR_SPEED_GROUP),
@@ -835,7 +884,7 @@ static void create_controls(HWND parent)
                               IDC_VAL_SPEED, 0, 0, 0, 0);
     g_controls.valDevRate = make_ctl(parent, 0, L"STATIC", tr(STR_DEVICE_RATE_EMPTY),
                                 SS_RIGHT, IDC_VAL_DEVRATE, 0, 0, 0, 0);
-    g_controls.btnSpeed = make_ctl(parent, 0, L"BUTTON", tr(STR_SPEED_NORMAL), 0,
+    g_controls.btnSpeed = make_ctl(parent, 0, L"BUTTON", tr(STR_SPEED_NORMAL), WS_TABSTOP,
                               IDC_BTN_SPEED, 0, 0, 0, 0);
 
     g_controls.status = CreateWindowExW(0, STATUSCLASSNAMEW, tr(STR_STATUS_READY),
@@ -1048,6 +1097,18 @@ static void on_command(int id)
     case IDM_LANG_ES:
         set_language(STR_LANG_ES);
         break;
+    case IDC_BTN_THEME:
+        show_theme_menu(g_hwnd);
+        break;
+    case IDM_THEME_SYSTEM:
+        set_theme(THEME_SYSTEM);
+        break;
+    case IDM_THEME_LIGHT:
+        set_theme(THEME_LIGHT);
+        break;
+    case IDM_THEME_DARK:
+        set_theme(THEME_DARK);
+        break;
     case IDC_BTN_REMOVE:
         if (g_library.selected_index >= 0)
             remove_track(g_library.selected_index);
@@ -1176,6 +1237,27 @@ static void show_language_menu(HWND owner)
     DestroyMenu(menu);
 }
 
+/* Theme picker opened from the theme button. Built on each click so the
+ * marked item always matches the saved choice. */
+static void show_theme_menu(HWND owner)
+{
+    POINT pt;
+    HMENU menu = CreatePopupMenu();
+    UINT checked = g_theme_choice == THEME_LIGHT ? IDM_THEME_LIGHT
+                 : g_theme_choice == THEME_DARK  ? IDM_THEME_DARK
+                 : IDM_THEME_SYSTEM;
+    if (!menu)
+        return;
+    AppendMenuW(menu, MF_STRING, IDM_THEME_SYSTEM, tr(STR_MENU_THEME_SYSTEM));
+    AppendMenuW(menu, MF_STRING, IDM_THEME_LIGHT, tr(STR_MENU_THEME_LIGHT));
+    AppendMenuW(menu, MF_STRING, IDM_THEME_DARK, tr(STR_MENU_THEME_DARK));
+    CheckMenuRadioItem(menu, IDM_THEME_SYSTEM, IDM_THEME_DARK, checked, MF_BYCOMMAND);
+    GetCursorPos(&pt);
+    SetForegroundWindow(owner);
+    TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, owner, NULL);
+    DestroyMenu(menu);
+}
+
 /* Writes the static caption of every control that create_controls() labels
  * with tr(). Controls whose text update_ui() owns (state, speed, version,
  * device, time) are not touched here: update_ui() rewrites them on the next
@@ -1204,6 +1286,7 @@ static void relabel_controls(void)
     SetWindowTextW(g_controls.btnPrevious, tr(STR_BUTTON_PREVIOUS));
     SetWindowTextW(g_controls.btnNext, tr(STR_BUTTON_NEXT));
     SetWindowTextW(g_controls.btnLang, tr(STR_BUTTON_LANGUAGE));
+    SetWindowTextW(g_controls.btnTheme, tr(STR_BUTTON_THEME));
     SetWindowTextW(g_controls.checkLoop, tr(STR_CHECK_LOOP));
     SetWindowTextW(g_controls.groupSpeed, tr(STR_SPEED_GROUP));
     {
@@ -1270,6 +1353,52 @@ static void unload_ui_font(void)
     g_font_loaded = 0;
 }
 
+/* Rebuilds every brush and colour that depends on the theme, then repaints.
+ * Called at startup and whenever the theme choice or the system mode changes. */
+static void apply_theme(void)
+{
+    HBRUSH oldBg = g_brushBg, oldBorde = g_brushBorde, oldFace = g_brushFace;
+    HBRUSH oldFill = g_brushProgFill, oldLoop = g_brushProgLoop, oldMarker = g_brushProgMarker;
+
+    g_ui_theme_dark = theme_is_dark_for(g_theme_choice);
+    g_brushBg = CreateSolidBrush(UI_C_FONDO);
+    g_brushBorde = CreateSolidBrush(UI_C_BORDE);
+    g_brushFace = CreateSolidBrush(UI_C_SUPERFICIE);
+    g_brushProgFill = CreateSolidBrush(UI_C_ACENTO);
+    g_brushProgLoop = CreateSolidBrush(UI_C_SECUNDARIO);
+    g_brushProgMarker = CreateSolidBrush(UI_C_ACENTO);
+
+    /* The window class keeps its own background brush, so point it at the new one. */
+    if (g_hwnd)
+        SetClassLongPtrW(g_hwnd, GCLP_HBRBACKGROUND, (LONG_PTR)g_brushBg);
+
+    /* The track list is a plain ListView: give it the palette colours directly. */
+    if (g_controls.list) {
+        ListView_SetBkColor(g_controls.list, UI_C_SUPERFICIE);
+        ListView_SetTextBkColor(g_controls.list, UI_C_SUPERFICIE);
+        ListView_SetTextColor(g_controls.list, UI_C_PRIMARIO);
+    }
+
+    if (oldBg) DeleteObject(oldBg);
+    if (oldBorde) DeleteObject(oldBorde);
+    if (oldFace) DeleteObject(oldFace);
+    if (oldFill) DeleteObject(oldFill);
+    if (oldLoop) DeleteObject(oldLoop);
+    if (oldMarker) DeleteObject(oldMarker);
+
+    if (g_hwnd)
+        RedrawWindow(g_hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+}
+
+/* Switches the colour theme at runtime, saves the choice and repaints. */
+static void set_theme(ThemeChoice choice)
+{
+    g_theme_choice = choice;
+    if (!g_selftest_mode && settings_save_theme(choice) != 0)
+        set_status(tr(STR_SETTINGS_SAVE_FAILED));
+    apply_theme();
+}
+
 /* Switches the language at runtime: saves the choice, relabels every control,
  * and refreshes the dynamic texts through update_ui(). */
 static void set_language(StrLanguage lang)
@@ -1296,6 +1425,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         g_hwnd = hwnd;
         load_saved_language();
         create_controls(hwnd);
+        apply_theme();
         SetTimer(hwnd, TIMER_UI, UI_TICK_MS, NULL);
         return 0;
 
@@ -1331,6 +1461,16 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             update_ui();
         return 0;
 
+    case WM_SETTINGCHANGE:
+        /* Windows app colour mode changed: re-read it when the saved
+         * choice is SYSTEM, then repaint with the new palette. */
+        if (lp && g_theme_choice == THEME_SYSTEM
+            && lstrcmpiW((LPCWSTR)lp, L"ImmersiveColorSet") == 0) {
+            g_ui_theme_dark = theme_is_dark_for(g_theme_choice);
+            apply_theme();
+        }
+        return 0;
+
     case WM_DRAWITEM: {
         DRAWITEMSTRUCT *dis = (DRAWITEMSTRUCT *)lp;
         IconKind kind;
@@ -1339,6 +1479,27 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         HBRUSH face;
         if (dis->CtlType != ODT_BUTTON)
             return FALSE;
+        /* Text buttons: language and theme pickers. */
+        if (dis->CtlID == IDC_BTN_LANG || dis->CtlID == IDC_BTN_THEME || dis->CtlID == IDC_BTN_PAIR) {
+            wchar_t text[64];
+            COLORREF text_fg = (dis->itemState & ODS_DISABLED)
+                ? GetSysColor(COLOR_GRAYTEXT) : UI_C_PRIMARIO;
+            HBRUSH text_bg = CreateSolidBrush(UI_C_SUPERFICIE);
+            GetWindowTextW(dis->hwndItem, text, 64);
+            FillRect(dis->hDC, &dis->rcItem, text_bg);
+            DeleteObject(text_bg);
+            SetBkMode(dis->hDC, TRANSPARENT);
+            SetTextColor(dis->hDC, text_fg);
+            SelectObject(dis->hDC, g_font);
+            DrawTextW(dis->hDC, text, -1, &dis->rcItem,
+                      DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            if (dis->itemState & ODS_FOCUS) {
+                RECT focus = dis->rcItem;
+                InflateRect(&focus, -3, -3);
+                DrawFocusRect(dis->hDC, &focus);
+            }
+            return TRUE;
+        }
         switch (dis->CtlID) {
         case IDC_BTN_PLAY: {
             TransportLogicalState ls = transport_logical_state(g_player_snapshot.state,
@@ -1352,13 +1513,12 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         default:
             return FALSE;
         }
-        /* Disabled buttons are drawn grey; pressed and normal use the face
-         * colour, so the glyph keeps its contrast in every state. */
+        /* Disabled buttons are grey; the rest use the theme accent. */
         if (dis->itemState & ODS_DISABLED)
             fg = GetSysColor(COLOR_GRAYTEXT);
         else
-            fg = GetSysColor(COLOR_BTNTEXT);
-        bg = GetSysColor(COLOR_BTNFACE);
+            fg = UI_C_ACENTO;
+        bg = UI_C_SUPERFICIE;
         face = CreateSolidBrush(bg);
         FillRect(dis->hDC, &dis->rcItem, face);
         DeleteObject(face);
@@ -1372,19 +1532,24 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     }
 
     case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLOREDIT:
     case WM_CTLCOLORBTN: {
         HDC hdc = (HDC)wp;
         HWND ctl = (HWND)lp;
         SetBkMode(hdc, TRANSPARENT);
+        SetBkColor(hdc, UI_C_SUPERFICIE);
         if (ctl == g_controls.valState) {
             PlayerState st = g_player_snapshot.state;
-            COLORREF c = RGB(96, 96, 96);
-            if (st == PLAYER_PLAYING) c = RGB(27, 124, 52);
-            else if (st == PLAYER_PAUSED) c = RGB(191, 108, 0);
-            else if (st == PLAYER_FINISHED) c = RGB(21, 101, 192);
+            COLORREF c = g_ui_theme_dark ? UI_STATE_DARK_LOADING : UI_STATE_LIGHT_LOADING;
+            if (st == PLAYER_PLAYING)
+                c = g_ui_theme_dark ? UI_STATE_DARK_PLAYING : UI_STATE_LIGHT_PLAYING;
+            else if (st == PLAYER_PAUSED)
+                c = g_ui_theme_dark ? UI_STATE_DARK_PAUSED : UI_STATE_LIGHT_PAUSED;
+            else if (st == PLAYER_FINISHED)
+                c = g_ui_theme_dark ? UI_STATE_DARK_FINISHED : UI_STATE_LIGHT_FINISHED;
             SetTextColor(hdc, c);
         } else {
-            SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
+            SetTextColor(hdc, UI_C_PRIMARIO);
         }
         return (LRESULT)g_brushFace;
     }
@@ -1398,6 +1563,14 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             g_font = NULL;
         }
         unload_ui_font();
+        if (g_brushBg) {
+            DeleteObject(g_brushBg);
+            g_brushBg = NULL;
+        }
+        if (g_brushBorde) {
+            DeleteObject(g_brushBorde);
+            g_brushBorde = NULL;
+        }
         if (g_brushFace) {
             DeleteObject(g_brushFace);
             g_brushFace = NULL;
@@ -1480,6 +1653,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
 
     argv = CommandLineToArgvW(GetCommandLineW(), &argc);
 
+    /* The saved theme decides the palette; a missing or invalid file means SYSTEM. */
+    settings_load_theme(&g_theme_choice);
+    g_ui_theme_dark = theme_is_dark_for(g_theme_choice);
+
     /* Selftest output must reach the caller's console when there is one. */
     if (argc > 1 && wcscmp(argv[1], L"--selftest") == 0
         && AttachConsole(ATTACH_PARENT_PROCESS)) {
@@ -1497,7 +1674,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
     if (!wc.hIcon)
         wc.hIcon = LoadIconW(NULL, (LPCWSTR)IDI_APPLICATION);
     wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    apply_theme();
+    wc.hbrBackground = g_brushBg;
     wc.lpszClassName = L"BRLoopPlayer";
     if (!RegisterClassExW(&wc))
         return 1;
@@ -1507,7 +1685,6 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
                          DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
                          CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                          DEFAULT_PITCH | FF_DONTCARE, UI_FONT_FACE);
-    g_brushFace = CreateSolidBrush(GetSysColor(COLOR_BTNFACE));
 
     {
         WNDCLASSW wcProg;
@@ -1519,10 +1696,6 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
         if (!RegisterClassW(&wcProg))
             return 1;
     }
-    g_brushProgFill = CreateSolidBrush(RGB(70, 140, 220));
-    g_brushProgLoop = CreateSolidBrush(RGB(255, 236, 200));
-    g_brushProgMarker = CreateSolidBrush(RGB(214, 92, 24));
-
     g_player = player_create(1);
     if (!g_player) {
         MessageBoxW(NULL, tr(STR_ENGINE_START_FAILED),
@@ -1581,6 +1754,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
     ShowWindow(g_hwnd, show);
     UpdateWindow(g_hwnd);
     while (GetMessageW(&msg, NULL, 0, 0) > 0) {
+        /* IsDialogMessage cycles Tab through the child controls that have
+         * WS_TABSTOP, in creation order (which matches the visual top-to-bottom
+         * order: Abrir, Quitar, Limpiar, lista, luego el resto). */
+        if (IsDialogMessageW(g_hwnd, &msg))
+            continue;
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
