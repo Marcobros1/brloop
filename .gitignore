@@ -75,3 +75,9 @@ __pycache__/
 .env
 .env.*
 local.props
+
+# ---- Preguntas y respuestas entre agentes (local, no se versiona) ----
+.orca/
+
+# ---- Propuestas de diseño y evaluación (local, no se versiona) ----
+docs/propuestas/
