@@ -46,7 +46,19 @@ jobs:
       # app\build (the shipped binary) stays unchanged.
       - name: Install OpenCppCoverage
         shell: pwsh
-        run: choco install opencppcoverage --version 0.9.9 -y --no-progress
+        run: |
+          # Instalador oficial del release 0.9.9.0 (tag release-0.9.9.0) del autor OpenCppCoverage.
+          # SHA-256 verificado contra la descarga de:
+          # https://github.com/OpenCppCoverage/OpenCppCoverage/releases/download/release-0.9.9.0/OpenCppCoverageSetup-x64-0.9.9.0.exe
+          $url = 'https://github.com/OpenCppCoverage/OpenCppCoverage/releases/download/release-0.9.9.0/OpenCppCoverageSetup-x64-0.9.9.0.exe'
+          $expectedHash = '2295a733da39412c61e4f478677519dd0bb1893d88313ce56b468c9e50517888'
+          $installer = Join-Path $env:TEMP 'OpenCppCoverageSetup-x64-0.9.9.0.exe'
+          Invoke-WebRequest -Uri $url -OutFile $installer
+          $actualHash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $expectedHash) {
+            throw "OpenCppCoverage SHA-256 mismatch: expected $expectedHash, got $actualHash"
+          }
+          & $installer /VERYSILENT
 
       - name: Measure coverage of the window self-test
         shell: pwsh
