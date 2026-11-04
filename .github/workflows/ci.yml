@@ -120,6 +120,13 @@ jobs:
           $ErrorActionPreference = 'Continue'
           & $oc --modules "$dbg*" --sources "$root\app\src*" --export_type "cobertura:$xml" -- (Join-Path $dbg 'brloop.exe') --selftest $stereo $quad --invalid $bad --report $report | Out-Null
           $selftest = $LASTEXITCODE
+          Write-Host "EXIT=$selftest"
+          if (Test-Path $report) {
+              Get-Content $report -Tail 5
+          } else {
+              Write-Host 'NO REPORT'
+              Get-ChildItem $cov
+          }
           $ErrorActionPreference = 'Stop'
           # Print the whole report so a failing check is visible in the log.
           Get-Content $report
