@@ -262,6 +262,36 @@ static void st_phase_library_crud(void)
              "primera pista seleccionada y abierta tras el CRUD");
 }
 
+/* Phase 1d - "Anterior" desde la primera fila al principio de la canción:
+ * position <= 3 s significa "pista anterior", que desde la primera fila
+ * envuelve al último transporte (transport_previous_index devuelve count-1).
+ * Esta rama nunca se recorre: el selftest solo probaba "anterior" desde una
+ * fila distinta de cero y "reinicia canción" al final de la canción. */
+static void st_phase_previous_wrap(void)
+{
+    st_check((*g_test->selected) == 0 && (*g_test->snapshot).sample_rate > 0,
+             "partiendo de la primera fila al inicio de la canción");
+    send_cmd(IDC_BTN_PREVIOUS);
+    pump(200);
+    st_check((*g_test->selected) == (*g_test->row_count) - 1
+                 && (*g_test->snapshot).sample_rate > 0,
+             "anterior desde la primera fila envuelve al último registro");
+
+    /* Vuelve a la primera pista (estéreo, detenida) para que las fases de
+     * transporte arranquen desde el estado base que esperan. Como el list
+     * permite selección múltiple (sin LVS_SINGLESEL), el ítem 0 sigue marcado
+     * tras haber marcado el 1: hay que deseleccionar ambos antes de volver a
+     * marcar el 0, de otro modo no hay cambio de estado, no se dispara
+     * LVN_ITEMCHANGED y select_track(0) no se ejecuta. */
+    ListView_SetItemState((*g_test->controls).list, 0, 0, LVIS_SELECTED);
+    ListView_SetItemState((*g_test->controls).list, 1, 0, LVIS_SELECTED);
+    ListView_SetItemState((*g_test->controls).list, 0, LVIS_SELECTED | LVIS_FOCUSED,
+                          LVIS_SELECTED | LVIS_FOCUSED);
+    pump(50);
+    st_check((*g_test->selected) == 0 && (*g_test->snapshot).sample_rate > 0,
+             "vuelve a la primera pista antes del transporte");
+}
+
 /* Phase 2 - transport: play reaches PLAYING with the device open, the API
  * stays responsive while the engine decodes (100 ms budget on
  * player_get_state), and pause freezes the position before resume. Also
@@ -602,6 +632,24 @@ static void st_phase_remove(void)
              "the replacement row still owns its name");
 }
 
+/* Phase 6 - "Limpiar": vacía la biblioteca y deshabilita el transporte hasta
+ * que se seleccione una pista. Ejercita remove_all() y library_clear(),
+ * nunca llamados por las fases previas. */
+static void st_phase_clear(void)
+{
+    send_cmd(IDC_BTN_CLEAR);
+    pump(50);
+    st_check((*g_test->row_count) == 0, "limpiar vacía la biblioteca");
+    st_check(IsWindowEnabled((*g_test->controls).btnPlay) == 0,
+             "reproducir deshabilitado sin pista seleccionada");
+    {
+        wchar_t bar[64] = L"";
+        SendMessageW((*g_test->controls).status, SB_GETTEXTW, 0, (LPARAM)bar);
+        st_check(wcscmp(bar, tr(STR_LIST_EMPTY)) == 0,
+                 "el estado informa de la lista vacía");
+    }
+}
+
 /* One full transport round on the current track: three play/seek/rewind/
  * pause cycles through the single play button and the previous button, then
  * a track switch (the file and the device are closed and reopened, the
@@ -680,6 +728,7 @@ static int run_selftest(void)
     st_log_handles("after modes/theme");
     st_phase_library_crud();
     st_log_handles("after library CRUD");
+    st_phase_previous_wrap();
     st_phase_transport();
     st_log_handles("after transport");
     st_phase_seek_speed();
@@ -711,6 +760,8 @@ static int run_selftest(void)
              "no handle growth across play/pause cycles");
     st_check(memB <= mem1 + 8u * 1024u * 1024u,
              "memory growth under 8 MB across cycles");
+    st_phase_clear();
+    st_log_handles("after clear");
 
     /* Cleanup: close the real window and compare resources. */
     SendMessageW(g_test->window, WM_CLOSE, 0, 0);
