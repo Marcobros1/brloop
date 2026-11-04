@@ -270,17 +270,27 @@ void browse_files(void)
     /* File-dialog filter: each name is followed by its pattern, and the list
      * ends with a double NUL, so the pieces are joined by hand. */
     {
-        wchar_t filter[256];
+        wchar_t filter[512];
         size_t fi = 0;
         const wchar_t *parts[4] = { tr(STR_FILTER_BRSTM), L"*.brstm", tr(STR_FILTER_ALL), L"*.*" };
+        size_t need = 1; /* final NUL that terminates the filter list */
         int pi;
-        for (pi = 0; pi < 4; pi++) {
-            size_t len = wcslen(parts[pi]);
-            memcpy(filter + fi, parts[pi], (len + 1) * sizeof(wchar_t));
-            fi += len + 1;
+        for (pi = 0; pi < 4; pi++)
+            need += wcslen(parts[pi]) + 1; /* each part plus its own NUL */
+        /* Compute the filter size before copying: memcpy with no length check
+         * overflows the fixed buffer on long translations, so fall back to no
+         * filter instead of writing past the array. */
+        if (need <= 512) {
+            for (pi = 0; pi < 4; pi++) {
+                size_t len = wcslen(parts[pi]);
+                memcpy(filter + fi, parts[pi], (len + 1) * sizeof(wchar_t));
+                fi += len + 1;
+            }
+            filter[fi] = L'\0';
+            ofn.lpstrFilter = filter;
+        } else {
+            ofn.lpstrFilter = NULL;
         }
-        filter[fi] = L'\0';
-        ofn.lpstrFilter = filter;
     }
     ofn.lpstrFile = buf;
     ofn.nMaxFile = 65536;
