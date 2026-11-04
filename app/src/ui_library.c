@@ -277,13 +277,13 @@ void browse_files(void)
         int pi;
         for (pi = 0; pi < 4; pi++)
             need += wcslen(parts[pi]) + 1; /* each part plus its own NUL */
-        /* Compute the filter size before copying: memcpy with no length check
-         * overflows the fixed buffer on long translations, so fall back to no
-         * filter instead of writing past the array. */
+        /* Copy each filter part (plus its NUL) with an explicit bound, so the
+         * analyzer sees the copy stays inside the 512-wchar buffer; too long
+         * translations fall back to no filter instead of writing out of bounds. */
         if (need <= 512) {
             for (pi = 0; pi < 4; pi++) {
                 size_t len = wcslen(parts[pi]);
-                memcpy(filter + fi, parts[pi], (len + 1) * sizeof(wchar_t));
+                wcsncpy_s(filter + fi, 512 - fi, parts[pi], len + 1);
                 fi += len + 1;
             }
             filter[fi] = L'\0';
