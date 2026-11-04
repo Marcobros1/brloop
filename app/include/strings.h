@@ -99,6 +99,10 @@ typedef enum {
     X(STR_MENU_ENGLISH,         L"English",                    L"English") \
     X(STR_MENU_SPANISH,         L"Español",                    L"Español") \
     X(STR_SETTINGS_SAVE_FAILED, L"No se pudo guardar el idioma.", L"Could not save the language.") \
+    X(STR_BUTTON_THEME,         L"Tema / Theme",               L"Tema / Theme") \
+    X(STR_MENU_THEME_SYSTEM,    L"Sistema",                    L"System") \
+    X(STR_MENU_THEME_LIGHT,     L"Claro",                      L"Light") \
+    X(STR_MENU_THEME_DARK,      L"Oscuro",                     L"Dark") \
     X(STR_SETTINGS_INVALID,     L"El archivo de configuración no es válido; se usa inglés.", L"The settings file is invalid; using English.") \
     X(STR_TRACK_ALREADY_ADDED,  L"«%s» ya está en la lista.", L"\"%s\" is already in the list.") \
     X(STR_FONT_MISSING,         L"No se encontró la fuente de la interfaz; se usa la del sistema.", L"The interface font was not found; using the system font.")

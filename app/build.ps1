@@ -49,7 +49,7 @@ $srcUi = '"' + (Join-Path $root 'src\ui_selftest.c') + '" "' + (Join-Path $root 
 # and the open-file dialog.
 $playerFlags = 'cl /nologo /W4 /WX /O2 /utf-8 /D_CRT_SECURE_NO_WARNINGS ' +
                '/DUNICODE /D_UNICODE /I"' + $incCore + '" /I"' + $incApp + '" '
-$playerLink = ' /link user32.lib gdi32.lib shell32.lib winmm.lib comctl32.lib comdlg32.lib psapi.lib'
+$playerLink = ' /link user32.lib gdi32.lib shell32.lib winmm.lib comctl32.lib comdlg32.lib psapi.lib uxtheme.lib advapi32.lib'
 $testLink = ' /link winmm.lib psapi.lib'
 $wav = '"' + (Join-Path $core 'src\wav_writer.c') + '"'
 
