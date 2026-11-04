@@ -1,6 +1,7 @@
 #ifndef STRINGS_H
 #define STRINGS_H
 
+#include <stdint.h>
 #include <wchar.h>
 
 /* User-visible text lookup. Every label, caption and message in the window is
@@ -124,5 +125,10 @@ StrLanguage strings_language(void);
 
 /* Returns the text for the active language. Never returns NULL. */
 const wchar_t *tr(StrKey key);
+
+/* Formats a speed in PPM as "whole,frac×" (>=2 decimals, trailing zeros
+ * trimmed, comma separator). Pure text: receives data, returns a result, no
+ * HWND and no locale dependency. */
+void format_speed(wchar_t *out, size_t n, uint32_t ppm);
 
 #endif /* STRINGS_H */

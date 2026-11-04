@@ -54,7 +54,6 @@ int narrow_path(const wchar_t *w, char *out, size_t outlen);
 const wchar_t *file_name_of(const wchar_t *path);
 void set_system_message(const wchar_t *text);
 void format_time(wchar_t *out, size_t n, double sec);
-void format_speed(wchar_t *out, size_t n, uint32_t ppm);
 void apply_speed(uint32_t ppm);
 
 #endif /* UI_STATE_H */

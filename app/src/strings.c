@@ -1,5 +1,7 @@
 #include "strings.h"
 
+#include "player.h"
+
 /* Both tables come from the single STRING_TABLE list in strings.h, so the
  * index of a text is always the index of its key. */
 #define STRING_ES(key, es, en) es,
@@ -29,4 +31,19 @@ const wchar_t *tr(StrKey key)
     if ((int)key < 0 || (int)key >= (int)STR_KEY_COUNT)
         return L"";
     return table[key];
+}
+
+/* "1,00" .. "1,06812": >=2 decimals, trailing zeros trimmed, comma.
+ * PPM scale: 1e6 = 1.0x (see PLAYER_SPEED_SCALE). Writes NUL-terminated
+ * text into `out`; never overflows `n`. */
+void format_speed(wchar_t *out, size_t n, uint32_t ppm)
+{
+    wchar_t frac[16];
+    uint32_t whole = ppm / PLAYER_SPEED_SCALE;
+    uint32_t rem = ppm % PLAYER_SPEED_SCALE;
+    int len = 5;
+    swprintf(frac, 16, L"%06u", rem);
+    while (len > 2 && frac[len - 1] == L'0')
+        len--;
+    swprintf(out, n, L"%u,%.*s\u00D7", whole, len, frac);
 }

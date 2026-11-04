@@ -57,19 +57,6 @@ void ctl_show(HWND h, int show)
         ShowWindow(h, show ? SW_SHOW : SW_HIDE);
 }
 
-/* "1,00" .. "1,06812": >=2 decimals, trailing zeros trimmed, comma. */
-void format_speed(wchar_t *out, size_t n, uint32_t ppm)
-{
-    wchar_t frac[16];
-    uint32_t whole = ppm / PLAYER_SPEED_SCALE;
-    uint32_t rem = ppm % PLAYER_SPEED_SCALE;
-    int len = 5;
-    swprintf(frac, 16, L"%06u", rem);
-    while (len > 2 && frac[len - 1] == L'0')
-        len--;
-    swprintf(out, n, L"%u,%.*s\u00D7", whole, len, frac);
-}
-
 /* Apply a speed button: send it to the engine and update the label at once. */
 void apply_speed(uint32_t ppm)
 {

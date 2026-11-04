@@ -1,6 +1,6 @@
 # Builds the BRLoop desktop prototype (T2) with MSVC (cl.exe) and the Windows SDK (rc.exe).
 # Usage: powershell -ExecutionPolicy Bypass -File app\build.ps1
-# Output: app\build\brloop.exe, app\build\player_tests.exe
+# Output: app\build\brloop.exe, app\build\player_tests.exe, app\build\ui_logic_tests.exe
 #
 # Only PowerShell runs here: the Visual Studio developer environment script is
 # not executed. Its variables (INCLUDE, LIB, PATH) are rebuilt from the Visual
@@ -117,6 +117,10 @@ try {
     Invoke-Native $cl (@($playerFlags) + $srcCommon + $srcUi + @($rcOut, '/Fe:brloop.exe') + $playerLink)
 
     Invoke-Native $cl (@($playerFlags) + $srcCommon + @($wav, (Join-Path $root 'tests\player_tests.c'), '/Fe:player_tests.exe') + $testLink)
+
+    # Headless UI-logic tests: no window, no audio. Built from the same
+    # common sources as player_tests.exe (window UI code is excluded).
+    Invoke-Native $cl (@($playerFlags) + $srcCommon + @((Join-Path $root 'tests\ui_logic_tests.c'), '/Fe:ui_logic_tests.exe') + $testLink)
 }
 finally {
     Pop-Location
@@ -128,10 +132,15 @@ if (-not (Test-Path $exe)) {
     Write-Error "Build finished but $exe is missing"
     exit 1
 }
+$testExe = Join-Path $build 'ui_logic_tests.exe'
+if (-not (Test-Path $testExe)) {
+    Write-Error "Build finished but $testExe is missing"
+    exit 1
+}
 
 # The interface font is loaded from assets\fonts next to the executable, so the
 # build output must carry it; otherwise the app falls back to the system font.
 $fontDir = Join-Path $build 'assets\fonts'
 New-Item -ItemType Directory -Force -Path $fontDir | Out-Null
 Copy-Item -Path (Join-Path $root 'assets\fonts\*') -Destination $fontDir -Force
-Write-Host "Built: $build\brloop.exe, $build\player_tests.exe"
+Write-Host "Built: $build\brloop.exe, $build\player_tests.exe, $build\ui_logic_tests.exe"
