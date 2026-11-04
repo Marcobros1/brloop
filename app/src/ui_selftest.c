@@ -7,6 +7,7 @@
 #include <wchar.h>
 
 #include "ui_selftest.h"
+#include "ui_state.h"
 #include "transport.h"
 #include "strings.h"
 
@@ -157,6 +158,108 @@ static void st_phase_library(void)
     pump(50);
     st_check((*g_test->selected) == 0 && (*g_test->snapshot).sample_rate > 0,
              "selection opens track and fills metadata");
+}
+
+/* Phase 1b - modes and theme: the mode bar (Biblioteca / Ajustes) and the
+ * theme selector (Claro / Oscuro / Sistema) change through the same
+ * WM_COMMAND path as a real click, and the central block follows the mode. */
+static void st_phase_modes_theme(void)
+{
+    /* Arranca en modo Biblioteca (create_controls llama a set_active_mode(0)). */
+    st_check(g_active_mode == 0, "arranca en modo Biblioteca");
+
+    /* Cambia a Ajustes: el bloque central (biblioteca) se oculta. */
+    send_cmd(IDC_BTN_MODE_SETTINGS);
+    pump(50);
+    st_check(g_active_mode == 2, "modo Ajustes activado");
+    st_check((GetWindowLongPtrW((*g_test->controls).groupLib, GWL_STYLE) & WS_VISIBLE) == 0,
+             "grupo Biblioteca oculto en modo Ajustes");
+    st_check((GetWindowLongPtrW((*g_test->controls).list, GWL_STYLE) & WS_VISIBLE) == 0,
+             "lista oculta en modo Ajustes");
+
+    /* Vuelve a Biblioteca: el bloque central reaparece. */
+    send_cmd(IDC_BTN_MODE_LIBRARY);
+    pump(50);
+    st_check(g_active_mode == 0, "modo Biblioteca restaurado");
+    st_check((GetWindowLongPtrW((*g_test->controls).groupLib, GWL_STYLE) & WS_VISIBLE) != 0,
+             "grupo Biblioteca visible en modo Biblioteca");
+    st_check((GetWindowLongPtrW((*g_test->controls).list, GWL_STYLE) & WS_VISIBLE) != 0,
+             "lista visible en modo Biblioteca");
+
+    /* Tema: Claro -> Oscuro -> Sistema (vuelve al valor por defecto). */
+    send_cmd(IDM_THEME_LIGHT);
+    pump(50);
+    st_check(g_theme_choice == THEME_LIGHT, "tema claro seleccionado");
+
+    send_cmd(IDM_THEME_DARK);
+    pump(50);
+    st_check(g_theme_choice == THEME_DARK, "tema oscuro seleccionado");
+
+    send_cmd(IDM_THEME_SYSTEM);
+    pump(50);
+    st_check(g_theme_choice == THEME_SYSTEM, "tema vuelve al sistema");
+}
+
+/* Phase 1c - biblioteca CRUD: añadir, seleccionar y quitar pistas usando los
+ * ficheros sintéticos que llegan por la línea de comandos. Se ejecuta antes
+ * de arrancar el transporte, con la biblioteca ya cargada y nada reproduciendo. */
+static void st_phase_library_crud(void)
+{
+    int before = (*g_test->row_count);
+    wchar_t err[1024];
+
+    if (before < 2) {
+        st_check(0, "se necesitan al menos 2 pistas sintéticas para CRUD");
+        return;
+    }
+
+    /* Seleccionar la segunda pista (mismo handler que un clic en la lista). */
+    ListView_SetItemState((*g_test->controls).list, 1, LVIS_SELECTED | LVIS_FOCUSED,
+                          LVIS_SELECTED | LVIS_FOCUSED);
+    pump(50);
+    st_check((*g_test->selected) == 1 && (*g_test->snapshot).sample_rate > 0,
+             "seleccionar la segunda pista la abre y rellena metadatos");
+
+    /* Añadir una pista que ya está en la lista debe rechazarse y no crecer. */
+    {
+        int before2 = (*g_test->row_count);
+        int rc = g_test->add_track(g_test->add_track_context,
+                                   g_test->library->rows[0].path, err, 1024);
+        st_check(rc != 0 && (*g_test->row_count) == before2,
+                 "añadir una pista duplicada es rechazado");
+    }
+
+    /* Quitar la pista seleccionada y volver a añadirla. */
+    {
+        const wchar_t *removedPath = g_test->library->rows[(*g_test->selected)].path;
+        size_t removedPathLen = wcslen(removedPath) + 1;
+        wchar_t *removedPathCopy = (wchar_t *)malloc(removedPathLen * sizeof(wchar_t));
+        if (removedPathCopy) {
+            memcpy(removedPathCopy, removedPath, removedPathLen * sizeof(wchar_t));
+            send_cmd(IDC_BTN_REMOVE);
+            pump(100);
+            st_check((*g_test->row_count) == before - 1,
+                     "quitar la pista seleccionada reduce la biblioteca");
+            /* Re-add the removed track. */
+            int rc = g_test->add_track(g_test->add_track_context,
+                                       removedPathCopy, err, 1024);
+            st_check(rc == 0 && (*g_test->row_count) == before,
+                     "re-añadir la pista quitada la recupera");
+            free(removedPathCopy);
+        } else {
+            st_check(0, "no se pudo reservar memoria para la prueba de re-add");
+        }
+    }
+
+    /* Deja una selección conocida (primera pista) para las fases siguientes.
+     * Se selecciona desde el estado "nada seleccionado" (tras el remove), lo
+     * mismo que hace phase_library al arrancar. */
+    ListView_SetItemState((*g_test->controls).list, 0, LVIS_SELECTED | LVIS_FOCUSED,
+                          LVIS_SELECTED | LVIS_FOCUSED);
+    pump(50);
+    st_check((*g_test->selected) == 0
+                 && (*g_test->snapshot).sample_rate > 0,
+             "primera pista seleccionada y abierta tras el CRUD");
 }
 
 /* Phase 2 - transport: play reaches PLAYING with the device open, the API
@@ -573,6 +676,10 @@ static int run_selftest(void)
     }
     st_phase_library();
     st_log_handles("after library");
+    st_phase_modes_theme();
+    st_log_handles("after modes/theme");
+    st_phase_library_crud();
+    st_log_handles("after library CRUD");
     st_phase_transport();
     st_log_handles("after transport");
     st_phase_seek_speed();
