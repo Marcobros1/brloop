@@ -72,27 +72,14 @@ $env:PATH = $clBin + ';' + $env:PATH
 # --- Sources, flags, libraries ------------------------------------------------
 $incCore = Join-Path $core 'include'
 $incApp = Join-Path $root 'include'
-$srcCommon = @(
-    (Join-Path $core 'src\brstm.c'),
-    (Join-Path $core 'src\dsp_adpcm.c'),
-    (Join-Path $root 'src\player.c'),
-    (Join-Path $root 'src\audio_out.c'),
-    (Join-Path $root 'src\cli_options.c'),
-    (Join-Path $root 'src\library.c'),
-    (Join-Path $root 'src\transport.c'),
-    (Join-Path $root 'src\resampler.c'),
-    (Join-Path $root 'src\strings.c'),
-    (Join-Path $root 'src\settings.c')
-)
-# Drawing code needs GDI: only the window executable links it, so the headless
-# test build stays free of GDI and cannot pick up window-only code by accident.
-$srcUi = @(
-    (Join-Path $root 'src\ui_selftest.c'),
-    (Join-Path $root 'src\icons.c'),
-    (Join-Path $root 'src\ui_state.c'),
-    (Join-Path $root 'src\ui_layout.c'),
-    (Join-Path $root 'src\ui_library.c')
-)
+# --- Sources (single source of truth, shared with .github/workflows/ci.yml) ----
+$sourcesTxt = Join-Path $repo 'app\sources.txt'
+$srcAll = Get-Content $sourcesTxt | Where-Object { $_.Trim() } | ForEach-Object { Join-Path $repo $_ }
+# UI/window-only code (needs GDI): linked into brloop.exe only; the headless
+# test build must not pull it in.
+$windowUi = @('ui_selftest.c','icons.c','main.c','ui_state.c','ui_layout.c','ui_library.c')
+$srcCommon = $srcAll | Where-Object { $windowUi -notcontains [IO.Path]::GetFileName($_) }
+$srcUi = $srcAll | Where-Object { $windowUi -contains [IO.Path]::GetFileName($_) }
 # /utf-8: source and wide literals are UTF-8 (Spanish UI strings);
 # UNICODE: wide Win32 API; winmm = waveOut, comctl32/comdlg32 = controls
 # and the open-file dialog.
@@ -127,7 +114,7 @@ try {
 
     # /Fe must precede /link: after /link every token goes to the linker,
     # which ignores it and names the output after the first source file.
-    Invoke-Native $cl (@($playerFlags) + $srcCommon + $srcUi + @((Join-Path $root 'src\main.c'), $rcOut, '/Fe:brloop.exe') + $playerLink)
+    Invoke-Native $cl (@($playerFlags) + $srcCommon + $srcUi + @($rcOut, '/Fe:brloop.exe') + $playerLink)
 
     Invoke-Native $cl (@($playerFlags) + $srcCommon + @($wav, (Join-Path $root 'tests\player_tests.c'), '/Fe:player_tests.exe') + $testLink)
 }
