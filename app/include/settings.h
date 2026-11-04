@@ -3,14 +3,21 @@
 
 #include "strings.h"
 
-/* User preferences kept between sessions. Only the interface language is
- * stored today. The file lives in %APPDATA%, never next to the music. */
+/* User preferences kept between sessions: interface language and colour
+ * theme. The file lives in %APPDATA%, never next to the music. */
 
 typedef enum {
     SETTINGS_OK = 0,
     SETTINGS_NOT_FOUND,     /* first run: no file yet, defaults apply */
     SETTINGS_INVALID        /* file exists but cannot be parsed */
 } SettingsStatus;
+
+/* Colour theme choice. SYSTEM follows the Windows app colour mode. */
+typedef enum {
+    THEME_SYSTEM = 0,
+    THEME_LIGHT = 1,
+    THEME_DARK = 2
+} ThemeChoice;
 
 /* Full path of settings.json, or 0 when %APPDATA% is unset. */
 int settings_path(wchar_t *out, size_t out_len);
@@ -22,5 +29,11 @@ SettingsStatus settings_load_language(StrLanguage *language);
 /* Writes the language, creating the folder when needed. Returns 0 on
  * success, -1 on any failure. */
 int settings_save_language(StrLanguage language);
+
+/* Reads the theme. Missing or invalid values give THEME_SYSTEM. */
+SettingsStatus settings_load_theme(ThemeChoice *theme);
+
+/* Writes the theme, keeping the saved language. Returns 0 or -1. */
+int settings_save_theme(ThemeChoice theme);
 
 #endif /* SETTINGS_H */

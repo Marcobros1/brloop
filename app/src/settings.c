@@ -85,6 +85,64 @@ static int parse_language(const char *text, StrLanguage *language)
     return 0;
 }
 
+/* Accepts "theme":"system", "light" or "dark". Anything else is not a theme. */
+static int parse_theme(const char *text, ThemeChoice *theme)
+{
+    const char *p = strstr(text, "\"theme\"");
+    if (!p)
+        return 0;
+    p += strlen("\"theme\"");
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
+        p++;
+    if (*p != ':')
+        return 0;
+    p++;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
+        p++;
+    if (strncmp(p, "\"system\"", 8) == 0) {
+        *theme = THEME_SYSTEM;
+        return 1;
+    }
+    if (strncmp(p, "\"light\"", 7) == 0) {
+        *theme = THEME_LIGHT;
+        return 1;
+    }
+    if (strncmp(p, "\"dark\"", 6) == 0) {
+        *theme = THEME_DARK;
+        return 1;
+    }
+    return 0;
+}
+
+/* Writes both preferences in one file. Each save keeps the other one, so the
+ * language and the theme never overwrite each other. */
+static int write_settings(StrLanguage language, ThemeChoice theme)
+{
+    wchar_t folder[MAX_PATH];
+    wchar_t path[MAX_PATH];
+    FILE *f;
+    const char *lang_code = language == STR_LANG_ES ? "es" : "en";
+    const char *theme_code = theme == THEME_LIGHT ? "light"
+                           : theme == THEME_DARK  ? "dark"
+                           : "system";
+
+    if (!settings_folder(folder, MAX_PATH))
+        return -1;
+    if (!settings_path(path, MAX_PATH))
+        return -1;
+    /* CreateDirectoryW fails with ERROR_ALREADY_EXISTS when the folder is
+     * already there, which is fine; any other failure stops the save. */
+    if (!CreateDirectoryW(folder, NULL) && GetLastError() != ERROR_ALREADY_EXISTS)
+        return -1;
+    f = _wfopen(path, L"wb");
+    if (!f)
+        return -1;
+    fprintf(f, "{\"language\":\"%s\",\"theme\":\"%s\"}\n", lang_code, theme_code);
+    if (fclose(f) != 0)
+        return -1;
+    return 0;
+}
+
 SettingsStatus settings_load_language(StrLanguage *language)
 {
     wchar_t path[MAX_PATH];
@@ -108,24 +166,35 @@ SettingsStatus settings_load_language(StrLanguage *language)
 
 int settings_save_language(StrLanguage language)
 {
-    wchar_t folder[MAX_PATH];
-    wchar_t path[MAX_PATH];
-    FILE *f;
-    const char *code = language == STR_LANG_ES ? "es" : "en";
+    ThemeChoice theme = THEME_SYSTEM;
+    settings_load_theme(&theme);
+    return write_settings(language, theme);
+}
 
-    if (!settings_folder(folder, MAX_PATH))
-        return -1;
+SettingsStatus settings_load_theme(ThemeChoice *theme)
+{
+    wchar_t path[MAX_PATH];
+    char text[512];
+    long n;
+
+    *theme = THEME_SYSTEM;
     if (!settings_path(path, MAX_PATH))
-        return -1;
-    /* CreateDirectoryW fails with ERROR_ALREADY_EXISTS when the folder is
-     * already there, which is fine; any other failure stops the save. */
-    if (!CreateDirectoryW(folder, NULL) && GetLastError() != ERROR_ALREADY_EXISTS)
-        return -1;
-    f = _wfopen(path, L"wb");
-    if (!f)
-        return -1;
-    fprintf(f, "{\"language\":\"%s\"}\n", code);
-    if (fclose(f) != 0)
-        return -1;
-    return 0;
+        return SETTINGS_NOT_FOUND;
+    n = read_file(path, text, sizeof text);
+    if (n == -2)
+        return SETTINGS_NOT_FOUND;
+    if (n < 0)
+        return SETTINGS_INVALID;
+    if (!parse_theme(text, theme)) {
+        *theme = THEME_SYSTEM;
+        return SETTINGS_INVALID;
+    }
+    return SETTINGS_OK;
+}
+
+int settings_save_theme(ThemeChoice theme)
+{
+    StrLanguage language = STR_LANG_EN;
+    settings_load_language(&language);
+    return write_settings(language, theme);
 }
