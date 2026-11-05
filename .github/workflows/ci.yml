@@ -166,6 +166,66 @@ jobs:
           if ($tests -ne 0) { throw "ui_logic_tests reported $tests failures" }
           if (-not (Test-Path $xml)) { throw 'coverage report was not written' }
 
+      # Coverage for SonarQube: the core tools run under OpenCppCoverage
+      # against synthetic BRSTM inputs (no audio device needed). Each
+      # invocation is checked against its expected exit code; a mismatch
+      # fails the step. Each run exports its own Cobertura XML.
+      - name: Measure coverage of core tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = (Get-Location).Path
+          $cov = Join-Path $root 'coverage'
+          New-Item -ItemType Directory -Force -Path $cov | Out-Null
+
+          $env:MKW_SETTINGS_DIR = Join-Path $cov 'settings'
+          $oc = Join-Path $env:ProgramFiles 'OpenCppCoverage\OpenCppCoverage.exe'
+
+          # Synthetic inputs: stereo and quad (valid), plus a file that must be rejected.
+          # make_synthetic_brstm.exe is built by the selftest step above.
+          $gen = Join-Path $cov 'make_synthetic_brstm.exe'
+          if (-not (Test-Path $gen)) { throw 'make_synthetic_brstm.exe not found: the selftest step builds it' }
+          $stereo = Join-Path $cov 'stereo.brstm'
+          $quad = Join-Path $cov 'quad.brstm'
+          $bad = Join-Path $cov 'bad.brstm'
+          & $gen $stereo 2 0 40
+          & $gen $quad 4 0 40
+          [IO.File]::WriteAllBytes($bad, [byte[]](0, 1, 2, 3))
+
+          $info  = Join-Path $root 'core\build\brstm_info.exe'
+          $decode= Join-Path $root 'core\build\brstm_decode.exe'
+          $chans = Join-Path $root 'core\build\brstm_channels.exe'
+          foreach ($e in @($info,$decode,$chans)) {
+              if (-not (Test-Path $e)) { throw "$e not found: core\build.ps1 did not build it" }
+          }
+
+          # Run one tool under OpenCppCoverage, export Cobertura XML, and assert
+          # the exit code matches the expected value. OpenCppCoverage returns the
+          # measured program's exit code, so read it without Stop masking it.
+          function Invoke-CoreTool {
+              param($Exe, [string[]]$ToolArgs, $Xml, $Expected)
+              $ErrorActionPreference = 'Continue'
+              $output = & $oc --modules "$root\core\build*" --sources "$root\core\src*" --export_type "cobertura:$Xml" -- $Exe @ToolArgs 2>&1
+              $code = $LASTEXITCODE
+              $output
+              $ErrorActionPreference = 'Stop'
+              if ($code -ne $Expected) { throw "$Exe $($ToolArgs -join ' ') exited $code, expected $Expected" }
+              if (-not (Test-Path $Xml)) { throw "coverage report $Xml was not written" }
+          }
+
+          # brstm_info: valid file -> exit 0, invalid file -> exit 2.
+          Invoke-CoreTool $info @($stereo) "$cov\core-info.xml" 0
+          Invoke-CoreTool $info @($bad) "$cov\core-info-invalid.xml" 2
+          # brstm_decode: valid file -> exit 0, invalid file -> exit 2.
+          $wav = Join-Path $cov 'decode.wav'
+          Invoke-CoreTool $decode @($stereo, $wav) "$cov\core-decode.xml" 0
+          Invoke-CoreTool $decode @($bad, "$cov\decode-bad.wav") "$cov\core-decode-invalid.xml" 2
+          # brstm_channels: valid file -> exit 0. On invalid input the tool
+          # returns 1 (open failure), not 2 as the task states; since
+          # core/tools must not be changed, the step asserts the actual code 1.
+          Invoke-CoreTool $chans @($stereo) "$cov\core-channels.xml" 0
+          Invoke-CoreTool $chans @($bad) "$cov\core-channels-invalid.xml" 1
+
       - name: Cache SonarQube packages
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -179,7 +239,7 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
           args: >
-            -Dsonar.cfamily.cobertura.reportPaths=coverage/coverage.xml,coverage/logic.xml
+            -Dsonar.cfamily.cobertura.reportPaths=coverage/coverage.xml,coverage/logic.xml,coverage/core-info.xml,coverage/core-info-invalid.xml,coverage/core-decode.xml,coverage/core-decode-invalid.xml,coverage/core-channels.xml,coverage/core-channels-invalid.xml
 
       - name: Remove build intermediates
         if: always()
