@@ -139,6 +139,33 @@ jobs:
           # the measured program's exit code, which must not fail this step.
           exit 0
 
+      # Coverage for SonarQube: the headless UI-logic tests run under
+      # OpenCppCoverage, which exports Cobertura XML. No audio device is
+      # involved, so a test failure fails this step.
+      - name: Measure coverage of the UI logic tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = (Get-Location).Path
+          $cov = Join-Path $root 'coverage'
+          New-Item -ItemType Directory -Force -Path $cov | Out-Null
+
+          $env:MKW_SETTINGS_DIR = Join-Path $cov 'settings'
+          $xml = Join-Path $cov 'logic.xml'
+          $oc = Join-Path $env:ProgramFiles 'OpenCppCoverage\OpenCppCoverage.exe'
+          $exe = Join-Path $root 'app\build\ui_logic_tests.exe'
+          if (-not (Test-Path $exe)) { throw 'ui_logic_tests.exe not found: app\build.ps1 did not build it' }
+          # OpenCppCoverage returns the exit code of the measured program. The
+          # tests are headless (no audio device), so a non-zero code fails the
+          # step instead of being dismissed as a warning.
+          $ErrorActionPreference = 'Continue'
+          $output = & $oc --modules "$root\app\build\ui_logic_tests*" --sources "$root\app\src*" --export_type "cobertura:$xml" -- $exe 2>&1
+          $tests = $LASTEXITCODE
+          $output
+          $ErrorActionPreference = 'Stop'
+          if ($tests -ne 0) { throw "ui_logic_tests reported $tests failures" }
+          if (-not (Test-Path $xml)) { throw 'coverage report was not written' }
+
       - name: Cache SonarQube packages
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -152,7 +179,7 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
           args: >
-            -Dsonar.cfamily.cobertura.reportPaths=coverage/coverage.xml
+            -Dsonar.cfamily.cobertura.reportPaths=coverage/coverage.xml,coverage/logic.xml
 
       - name: Remove build intermediates
         if: always()
