@@ -34,27 +34,18 @@
 #include "settings.h"
 #include "icons.h"
 
+#include "ui_state.h"
+#include "ui_layout.h"
+#include "ui_library.h"
+#include "ui_dialogs.h"
+
+/* Forward declarations: functions defined in other modules that main.c calls.
+ * ui_state.h externs the shared globals; these are the helpers main.c needs. */
+void set_active_mode(int mode);
+
 /* ------------------------------------------------------------- app state --
- * Win32 pattern: one instance of the whole UI lives in file-scope globals
- * (single window, single player). Everything below is UI-thread-only, so no
- * lock is needed here - the only cross-thread object is g_player, which has
- * its own critical section. */
-static HWND g_hwnd;         /* main window; also passed to dialogs */
-static Controls g_controls;      /* every child control handle, filled once */
-/* The UI font ships with the app (SIL OFL 1.1, see app/assets/fonts/OFL.txt).
- * It is loaded privately, so it works without being installed on the system. */
-#define UI_FONT_FACE L"Pixelify Sans"
-#define UI_FONT_FILE L"assets\\fonts\\PixelifySans.ttf"
-static HFONT g_font;        /* shared UI font for all controls */
-static int g_font_loaded;
-static HBRUSH g_brushFace;  /* panel background (group boxes, labels) */
-static HBRUSH g_brushBg;    /* client area background */
-static HBRUSH g_brushBorde; /* control borders */
-static ThemeChoice g_theme_choice = THEME_SYSTEM; /* saved choice */
-static int g_ui_theme_dark; /* 1 = dark theme in force */
-static Player *g_player;    /* engine; created in wWinMain, destroyed in
-                             * WM_DESTROY (so every exit path is covered by
-                             * the window lifetime) */
+ * All file-scope globals moved to ui_state.c / ui_state.h. main.c keeps only
+ * the settings load status, which is defined near load_saved_language. */
 
 /* Dark when Windows apps use the dark colour mode. Reads
  * HKCU\...\Themes\Personalize AppsUseLightTheme (0 = dark, 1 = light).
@@ -82,27 +73,9 @@ static int theme_is_dark_for(ThemeChoice choice)
     return system_theme_is_dark();
 }
 
-static LibraryState g_library = {
-    NULL, 0, 0, -1
-};
-
-/* Last snapshot polled from the player (100 ms timer). The UI never reads
- * the player directly outside update_ui/select_track, so g_player_snapshot is the one
- * place "what the UI believes" lives; command handlers that must not act on
- * stale data re-query the player instead. */
-static PlayerSnapshot g_player_snapshot;
-static uint32_t g_last_reported_error; /* audio_error already shown in status */
-static int g_decode_reported;          /* decode failure already shown once */
-
-/* Selftest bookkeeping (--selftest). */
-static int g_selftest_mode;             /* running as a scripted self-test */
-static FILE *g_selftest_report;         /* optional report file (see load_args) */
-static wchar_t g_selftest_invalid_path[1024];/* path of a file that must be rejected */
-static int g_has_invalid_path;
-
 /* UTF-16 path -> ANSI path for the core (fopen). Fails clearly when the
  * path cannot be represented in the system code page. */
-static int narrow_path(const wchar_t *w, char *out, size_t outlen)
+int narrow_path(const wchar_t *w, char *out, size_t outlen)
 {
     BOOL used = FALSE;
     int n = WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, w, -1,
@@ -112,7 +85,7 @@ static int narrow_path(const wchar_t *w, char *out, size_t outlen)
 
 /* File name portion of a path, for display and error messages (handles both
  * separator styles; no allocation, points into `path`). */
-static const wchar_t *file_name_of(const wchar_t *path)
+const wchar_t *file_name_of(const wchar_t *path)
 {
     const wchar_t *slash = wcsrchr(path, L'\\');
     const wchar_t *slash2 = wcsrchr(path, L'/');
@@ -123,7 +96,7 @@ static const wchar_t *file_name_of(const wchar_t *path)
 
 /* "0:00.000" or "1:23:04.567" (hours only when needed). Milliseconds are
  * rounded, then split largest-first so the parts always add up. */
-static void format_time(wchar_t *out, size_t n, double sec)
+void format_time(wchar_t *out, size_t n, double sec)
 {
     int ms, h, m, s;
     if (sec < 0.0)
@@ -138,370 +111,19 @@ static void format_time(wchar_t *out, size_t n, double sec)
         swprintf(out, n, L"%d:%02d.%03d", m, s, ms);
 }
 
-/* "1,00" .. "1,06812": >=2 decimals, trailing zeros trimmed, comma. */
-static void format_speed(wchar_t *out, size_t n, uint32_t ppm)
-{
-    wchar_t frac[16];
-    uint32_t whole = ppm / PLAYER_SPEED_SCALE;
-    uint32_t rem = ppm % PLAYER_SPEED_SCALE;
-    int len = 5;
-    swprintf(frac, 16, L"%06u", rem);
-    while (len > 2 && frac[len - 1] == L'0')
-        len--;
-    swprintf(out, n, L"%u,%.*s\u00D7", whole, len, frac);
-}
-
-/* Status bar text: every user-visible message funnels through here so the
- * selftest and the user see the same wording. */
-static void set_status(const wchar_t *text)
-{
-    if (g_controls.status)
-        SendMessageW(g_controls.status, SB_SETTEXTW, 0, (LPARAM)text);
-}
-
 /* ---------------------------------------------------------------- rows -- */
 
-static void list_set_loop_cell(int idx, const TrackRow *row);
-
-/* Insert the list columns' values for one library row. Called once per row
- * when added; column order must match create_controls(). */
-static void list_insert_row(int idx, const TrackRow *row)
-{
-    LVITEMW it;
-    wchar_t buf[64];
-    memset(&it, 0, sizeof it);
-    it.iItem = idx;
-    it.pszText = (wchar_t *)row->name;
-    it.mask = LVIF_TEXT;
-    ListView_InsertItem(g_controls.list, &it);
-
-    swprintf(buf, 64, L"%u", row->rate);
-    ListView_SetItemText(g_controls.list, idx, 1, buf);
-    swprintf(buf, 64, L"%u", row->channels);
-    ListView_SetItemText(g_controls.list, idx, 2, buf);
-    format_time(buf, 64, (double)row->total / row->rate);
-    ListView_SetItemText(g_controls.list, idx, 3, buf);
-    list_set_loop_cell(idx, row);
-}
-
-/* Writes the loop column in the current language. Called on insert and again
- * on every language change, so the column never keeps the old language. */
-static void list_set_loop_cell(int idx, const TrackRow *row)
-{
-    /* The list view copies the text and never writes to it, so the const
-     * string from the table is safe to pass through its non-const parameter. */
-    ListView_SetItemText(g_controls.list, idx, 4,
-                         (wchar_t *)(row->loop ? tr(STR_LOOP_YES) : tr(STR_LOOP_NO)));
-}
-
-static void list_refresh_loop_column(void)
-{
-    for (int i = 0; i < g_library.count; i++)
-        list_set_loop_cell(i, &g_library.rows[i]);
-}
-
-/* Info panel with nothing to show: placeholders + loop control disabled, so
- * values from a previous track can never be mistaken for the new state. */
-static void clear_info_panel(void)
-{
-    SetWindowTextW(g_controls.valName, L"\u2014");
-    SetWindowTextW(g_controls.valPath, L"");
-    SetWindowTextW(g_controls.valRate, L"\u2014");
-    SetWindowTextW(g_controls.valCh, L"\u2014");
-    SetWindowTextW(g_controls.valSamples, L"\u2014");
-    SetWindowTextW(g_controls.valDur, L"\u2014");
-    SetWindowTextW(g_controls.valLoop, L"\u2014");
-    SetWindowTextW(g_controls.valLoopSt, tr(STR_LOOP_UNAVAILABLE));
-    SetWindowTextW(g_controls.valLoopEnd, tr(STR_LOOP_UNAVAILABLE));
-    EnableWindow(g_controls.checkLoop, FALSE);
-}
-
-/* Fill the info panel from a fresh snapshot. Also syncs the loop checkbox
- * with the engine (BM_SETCHECK here and in update_ui: the checkbox is
- * driven state, not the source of truth - player_set_loop is). */
-static void fill_info_panel(const PlayerSnapshot *s)
-{
-    wchar_t buf[128];
-    wchar_t t[40];
-
-    swprintf(buf, 128, L"%u Hz", s->sample_rate);
-    SetWindowTextW(g_controls.valRate, buf);
-    swprintf(buf, 128, L"%u", s->channels);
-    SetWindowTextW(g_controls.valCh, buf);
-    swprintf(buf, 128, L"%llu", (unsigned long long)s->total_samples);
-    SetWindowTextW(g_controls.valSamples, buf);
-    format_time(t, 40, (double)s->total_samples / s->sample_rate);
-    SetWindowTextW(g_controls.valDur, t);
-    if (s->file_loop) {
-        format_time(t, 40, (double)s->loop_start / s->sample_rate);
-        swprintf(buf, 128, L"%u (%s)", s->loop_start, t);
-        SetWindowTextW(g_controls.valLoopSt, buf);
-        swprintf(buf, 128, tr(STR_LOOP_END_POSITION),
-                 (unsigned long long)s->total_samples);
-        SetWindowTextW(g_controls.valLoopEnd, buf);
-        SetWindowTextW(g_controls.valLoop, tr(STR_LOOP_YES));
-    } else {
-        SetWindowTextW(g_controls.valLoop, tr(STR_LOOP_NO));
-        SetWindowTextW(g_controls.valLoopSt, tr(STR_LOOP_UNAVAILABLE));
-        SetWindowTextW(g_controls.valLoopEnd, tr(STR_LOOP_UNAVAILABLE));
-    }
-    EnableWindow(g_controls.checkLoop, s->file_loop != 0);
-    SendMessageW(g_controls.checkLoop, BM_SETCHECK,
-                 s->loop_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
-}
-
-/* Make `idx` the current track: stop/close the previous one, open the new
- * path through the player and refresh the info panel. Any failure (ANSI
- * path unrepresentable, invalid BRSTM) leaves the player closed and shows
- * the reason in the status bar - the selection still moves so the user sees
- * which row the message is about. */
-static void select_track(int idx)
-{
-    TrackRow *row;
-    char narrow[1024];
-    char err[512];
-    wchar_t msg[1400];
-    PlayerSnapshot s;
-
-    if (idx < 0 || idx >= g_library.count || idx == g_library.selected_index)
-        return;
-
-    /* Close the current track before selecting the new one. This keeps the
-     * UI and player state aligned when opening the replacement fails. */
-    player_stop(g_player);
-    player_close(g_player);
-    g_library.selected_index = idx;
-    row = &g_library.rows[idx];
-
-    if (!narrow_path(row->path, narrow, sizeof narrow)) {
-        clear_info_panel();
-        set_status(tr(STR_PATH_NOT_ANSI));
-        return;
-    }
-    err[0] = '\0';
-    if (player_open(g_player, narrow, err, sizeof err) != 0) {
-        wchar_t werr[512];
-        MultiByteToWideChar(CP_ACP, 0, err, -1, werr, 512);
-        clear_info_panel();
-        swprintf(msg, 1400, tr(STR_TRACK_OPEN_FAILED), row->name, werr);
-        set_status(msg);
-        return;
-    }
-
-    SetWindowTextW(g_controls.valName, row->name);
-    SetWindowTextW(g_controls.valPath, row->path);
-    s = player_get_state(g_player);
-    /* The UI exposes individual versions only. The engine still supports
-     * pair -1 for internal tests and callers that explicitly need a mix. */
-    if (s.pair_count > 0 && s.pair_sel < 0) {
-        if (player_set_channel_pair(g_player, 0) == 0)
-            s = player_get_state(g_player);
-    }
-    fill_info_panel(&s);
-    g_player_snapshot = s;
-    g_last_reported_error = 0;
-    g_decode_reported = 0;
-    swprintf(msg, 1400, tr(STR_TRACK_OPENED), row->name);
-    set_status(msg);
-}
-
-/* Validate a file with a full brstm_open and append it to the library.
- * Validation happens here (not on selection) so bad files are rejected the
- * moment they enter the list, with a specific message per file. The opened
- * Brstm is only read for the metadata columns and closed immediately; the
- * player opens it again on selection. Returns 0 or -1 with errbuf set. */
-static int add_track(const wchar_t *path, wchar_t *errbuf, size_t errlen)
-{
-    char narrow[1024];
-    char err[512];
-    Brstm tmp;
-    BrstmStatus st;
-    LibraryTrackInfo info;
-
-    if (!narrow_path(path, narrow, sizeof narrow)) {
-        swprintf(errbuf, errlen, tr(STR_PATH_NOT_ANSI_NAMED),
-                 file_name_of(path));
-        return -1;
-    }
-    st = brstm_open(narrow, &tmp, err, sizeof err);
-    if (st != BRSTM_OK) {
-        wchar_t werr[512];
-        MultiByteToWideChar(CP_ACP, 0, err, -1, werr, 512);
-        swprintf(errbuf, errlen, tr(STR_TRACK_INVALID_NAMED), file_name_of(path), werr);
-        return -1;
-    }
-
-    info.rate = tmp.info.sample_rate;
-    info.channels = tmp.info.channels;
-    info.total = tmp.info.total_samples;
-    info.loop = tmp.info.loop;
-    info.loop_start = tmp.info.loop_start;
-    brstm_close(&tmp);
-
-    if (library_contains_path(&g_library, path)) {
-        swprintf(errbuf, errlen, tr(STR_TRACK_ALREADY_ADDED), file_name_of(path));
-        return -1;
-    }
-    if (library_add(&g_library, path, file_name_of(path), &info) != 0) {
-        swprintf(errbuf, errlen, tr(STR_TRACK_NO_MEMORY), file_name_of(path));
-        return -1;
-    }
-    list_insert_row(g_library.count - 1, &g_library.rows[g_library.count - 1]);
-    return 0;
-}
-
-/* Remove row idx: shift the array, delete the list item and repair the
- * selection. If the removed row was playing, playback stops; the next row
- * (or none) becomes the selection, keeping g_library.selected_index always valid. */
-static void remove_track(int idx)
-{
-    int was_selected;
-    int replacement;
-
-    if (idx < 0 || idx >= g_library.count)
-        return;
-    was_selected = idx == g_library.selected_index;
-    replacement = library_remove(&g_library, idx);
-    ListView_DeleteItem(g_controls.list, idx);
-
-    if (was_selected) {
-        player_stop(g_player);
-        player_close(g_player);
-        clear_info_panel();
-        if (replacement >= 0) {
-            /* Select and open synchronously: waiting for LVN_ITEMCHANGED would
-             * leave the player closed until the message loop runs again. The
-             * list selection is then kept in step with the library state. */
-            ListView_SetItemState(g_controls.list, replacement,
-                                  LVIS_SELECTED | LVIS_FOCUSED,
-                                  LVIS_SELECTED | LVIS_FOCUSED);
-            g_library.selected_index = -1;
-            select_track(replacement);
-        }
-    }
-}
-
-/* "Limpiar": stop playback, free every row's strings and empty the list.
- * The g_library.rows buffer itself is kept (capacity reuse across clears; it is
- * process-lifetime state like the rest of the globals and is reclaimed by
- * the OS at exit). */
-static void remove_all(void)
-{
-    player_stop(g_player);
-    player_close(g_player);
-    library_clear(&g_library);
-    ListView_DeleteAllItems(g_controls.list);
-    clear_info_panel();
-    set_status(tr(STR_LIST_EMPTY));
-}
-
-/* ----------------------------------------------------------- file open -- */
-
-/* File dialog (multi-select allowed). The OPENFILENAME buffer uses the
- * documented two-part layout: dir\0 then file\0 file\0 ... \0 (single file
- * = just the path). Every added file is validated by add_track; failures
- * are reported once, with a count, instead of one box per file. */
-static void browse_files(void)
-{
-    static wchar_t buf[65536];
-    static wchar_t dir[33000];
-    static wchar_t full[33000];
-    OPENFILENAMEW ofn;
-    wchar_t err[1024], msg[1400], sum[128];
-    int added = 0, failed = 0;
-
-    memset(&ofn, 0, sizeof ofn);
-    memset(buf, 0, sizeof buf);
-    ofn.lStructSize = sizeof ofn;
-    ofn.hwndOwner = g_hwnd;
-    /* File-dialog filter: each name is followed by its pattern, and the list
-     * ends with a double NUL, so the pieces are joined by hand. */
-    {
-        wchar_t filter[256];
-        size_t fi = 0;
-        const wchar_t *parts[4] = { tr(STR_FILTER_BRSTM), L"*.brstm", tr(STR_FILTER_ALL), L"*.*" };
-        int pi;
-        for (pi = 0; pi < 4; pi++) {
-            size_t len = wcslen(parts[pi]);
-            memcpy(filter + fi, parts[pi], (len + 1) * sizeof(wchar_t));
-            fi += len + 1;
-        }
-        filter[fi] = L'\0';
-        ofn.lpstrFilter = filter;
-    }
-    ofn.lpstrFile = buf;
-    ofn.nMaxFile = 65536;
-    ofn.Flags = OFN_ALLOWMULTISELECT | OFN_EXPLORER
-              | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
-    if (!GetOpenFileNameW(&ofn))
-        return;
-
-    msg[0] = L'\0';
-    wchar_t *p = buf;
-    if (p[0] && p[wcslen(p) + 1] != L'\0') {
-        wcscpy_s(dir, 33000, p);
-        p += wcslen(p) + 1;
-        while (*p) {
-            swprintf(full, 33000, L"%s\\%s", dir, p);
-            if (add_track(full, err, 1024) == 0)
-                added++;
-            else {
-                if (failed == 0)
-                    wcscpy_s(msg, 1400, err);
-                failed++;
-            }
-            p += wcslen(p) + 1;
-        }
-    } else {
-        if (add_track(buf, err, 1024) == 0)
-            added++;
-        else {
-            wcscpy_s(msg, 1400, err);
-            failed++;
-        }
-    }
-
-    if (failed > 0) {
-        wchar_t box[2048];
-        if (failed > 1)
-            swprintf(box, 2048, tr(STR_INVALID_FILES_MORE), msg, failed - 1);
-        else
-            swprintf(box, 2048, L"%s", msg);
-        MessageBoxW(g_hwnd, box, tr(STR_INVALID_FILE_TITLE),
-                    MB_OK | MB_ICONWARNING);
-    }
-    if (added > 0 && g_library.selected_index < 0 && g_library.count > 0)
-        ListView_SetItemState(g_controls.list, 0, LVIS_SELECTED | LVIS_FOCUSED,
-                              LVIS_SELECTED | LVIS_FOCUSED);
-    if (added > 0) {
-        swprintf(sum, 128, tr(STR_LIST_COUNT), g_library.count);
-        set_status(sum);
-    }
-}
+/* Declared in ui_state.h / ui_library.h; main.c calls them via those headers. */
 
 /* ------------------------------------------------- progress with loop ---- */
 
 /* Custom progress bar: the loop section [loop_start, total) is shaded and a
  * marker line shows the loop start, so both loop points are visible while
  * the song plays. Paint state is UI-thread-only (set in update_ui). */
-
-static uint64_t g_progress_position;
-static uint64_t g_progress_total;
-static uint32_t g_progress_loop_start;
-static int      g_progress_has_loop;
-static HBRUSH   g_brushProgFill;   /* played portion */
-static HBRUSH   g_brushProgLoop;   /* loop region */
-static HBRUSH   g_brushProgMarker; /* loop start line */
-
-static void update_ui(void);
 static void set_language(StrLanguage lang);
-static void show_language_menu(HWND owner);
-static void show_theme_menu(HWND owner);
 static void set_theme(ThemeChoice choice);
 
 /* Seek: click (or drag end) on the bar jumps to that source position. */
-static int g_progress_dragging;
-static int g_progress_drag_x;
 
 /* Map a click/drag x position to a source sample and seek there. The 1px
  * frame on each side of the custom bar is excluded, and the ratio is done
@@ -620,117 +242,6 @@ static LRESULT CALLBACK progress_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
-/* -------------------------------------------------------------- layout -- */
-
-/* Absolute position/size of one control; no-op for a not-yet-created handle
- * so layout() is safe to call before every control exists. */
-static void move_ctl(HWND h, int x, int y, int w, int hh)
-{
-    if (h)
-        SetWindowPos(h, NULL, x, y, w, hh,
-                     SWP_NOZORDER | SWP_NOACTIVATE);
-}
-
-/* Recompute every control position from the client size. Called on
- * WM_SIZE and once after creation. Fixed pixel geometry (no auto-scale):
- * the window enforces a 760x560 minimum in WM_GETMINMAXINFO, and the
- * layout is simple enough that proportional scaling would add complexity
- * without visible benefit at this stage. Left column = library (width
- * clamped 330..440), right column = info / transport / speed panels. */
-static void layout(void)
-{
-    RECT rc;
-    int cw, ch;
-    int m = 12, g = 10, statusH = 24;
-    int leftW, rightX, rightW, topH;
-    int infoH = 178, playH = 134;
-    int x0, col2, y;
-
-    if (!g_hwnd)
-        return;
-    GetClientRect(g_hwnd, &rc);
-    cw = rc.right - rc.left;
-    ch = rc.bottom - rc.top;
-    if (cw < 100 || ch < 100)
-        return;
-
-    SendMessageW(g_controls.status, WM_SIZE, 0, 0);
-
-    leftW = cw * 46 / 100;
-    if (leftW < 330) leftW = 330;
-    if (leftW > 440) leftW = 440;
-    rightX = m + leftW + g;
-    rightW = cw - rightX - m;
-    x0 = rightX + 12;
-    col2 = rightX + rightW / 2 + 2;
-
-    /* Top area: library and file info. The playback bar takes the full width
-     * at the bottom, so the top area ends above it. */
-    topH = ch - statusH - 2 * m - playH - g;
-
-    /* Library (left column, top area). */
-    move_ctl(g_controls.groupLib, m, m, leftW, topH);
-    move_ctl(g_controls.btnOpen, m + 12, m + 22, 96, 26);
-    move_ctl(g_controls.btnRemove, m + 116, m + 22, 84, 26);
-    move_ctl(g_controls.btnClear, m + 208, m + 22, 84, 26);
-    move_ctl(g_controls.list, m + 12, m + 56, leftW - 24, topH - 56 - 12);
-
-    /* Information panel (right column, top area). */
-    move_ctl(g_controls.groupInfo, rightX, m, rightW, topH);
-    y = m + 22;
-    move_ctl(g_controls.capName, x0, y, 84, 18);
-    move_ctl(g_controls.valName, x0 + 88, y, rightW / 2 - 104, 18);
-    move_ctl(g_controls.capCh, col2, y, 74, 18);
-    move_ctl(g_controls.valCh, col2 + 78, y, rightW - (col2 - rightX) - 90, 18);
-    y += 24;
-    move_ctl(g_controls.capRate, x0, y, 84, 18);
-    move_ctl(g_controls.valRate, x0 + 88, y, rightW / 2 - 104, 18);
-    move_ctl(g_controls.capDur, col2, y, 74, 18);
-    move_ctl(g_controls.valDur, col2 + 78, y, rightW - (col2 - rightX) - 90, 18);
-    y += 24;
-    move_ctl(g_controls.capSamples, x0, y, 84, 18);
-    move_ctl(g_controls.valSamples, x0 + 88, y, rightW / 2 - 104, 18);
-    move_ctl(g_controls.capLoop, col2, y, 74, 18);
-    move_ctl(g_controls.valLoop, col2 + 78, y, rightW - (col2 - rightX) - 90, 18);
-    y += 24;
-    move_ctl(g_controls.capLoopSt, x0, y, 84, 18);
-    move_ctl(g_controls.valLoopSt, x0 + 88, y, col2 - (x0 + 88) - 12, 18);
-    move_ctl(g_controls.capLoopEnd, col2, y, 74, 18);
-    move_ctl(g_controls.valLoopEnd, col2 + 78, y, rightW - (col2 - rightX) - 90,
-             18);
-    y += 24;
-    move_ctl(g_controls.capVer, x0, y, 84, 18);
-    move_ctl(g_controls.btnPair, x0 + 88, y - 2, rightW - 104, 22);
-    y += 26;
-    move_ctl(g_controls.capPath, x0, y, 84, 18);
-    move_ctl(g_controls.valPath, x0 + 88, y, rightW - 104, 20);
-
-    /* Bottom bar, full width: transport, progress, state, loop and speed.
-     * Play/pause (96+ px so "Reproducir" fits) sits between previous and
-     * next, as before. */
-    y = ch - statusH - m - playH;
-    move_ctl(g_controls.groupPlay, m, y, cw - 2 * m, playH);
-    /* Previous, play and next form one row (84 + 12 + 104 + 12 + 96 = 308 px),
-     * centred in the box. */
-    x0 = m + ((cw - 2 * m) - 308) / 2;
-    move_ctl(g_controls.btnPrevious, x0, y + 22, 84, 28);
-    move_ctl(g_controls.btnPlay, x0 + 96, y + 22, 104, 28);
-    move_ctl(g_controls.btnNext, x0 + 212, y + 22, 96, 28);
-    move_ctl(g_controls.progress, m + 12, y + 58, cw - 2 * m - 24 - 176, 16);
-    move_ctl(g_controls.valState, cw - m - 12 - 164, y + 56, 164, 20);
-    move_ctl(g_controls.valTime, m + 12, y + 80, 170, 18);
-    move_ctl(g_controls.checkLoop, m + 12, y + 108, 170, 20);
-    move_ctl(g_controls.btnLang, cw - m - 12 - 150, y + 76, 150, 26);
-    move_ctl(g_controls.btnTheme, cw - m - 12 - 150, y + 104, 150, 26);
-
-    /* Speed: sits in the top-right column under the file info. */
-    y = m + infoH + g;
-    move_ctl(g_controls.groupSpeed, rightX, y, rightW, topH - infoH - g);
-    move_ctl(g_controls.valSpeed, rightX + 12, y + 28, 84, 20);
-    move_ctl(g_controls.valDevRate, rightX + rightW - 12 - 170, y + 28, 170, 20);
-    move_ctl(g_controls.btnSpeed, rightX + (rightW - 200) / 2, y + 60, 200, 26);
-}
-
 /* ------------------------------------------------------------ creation -- */
 
 /* Create one child control with the shared font applied. The pattern
@@ -822,7 +333,7 @@ static void create_controls(HWND parent)
                              IDC_CAP_PATH, 0, 0, 0, 0);
     g_controls.valName = make_ctl(parent, 0, L"STATIC", L"\u2014", 0,
                              IDC_VAL_NAME, 0, 0, 0, 0);
-    g_controls.valPath = make_ctl(parent, WS_EX_CLIENTEDGE, L"EDIT", L"",
+    g_controls.valPath = make_ctl(parent, 0, L"EDIT", L"",
                              ES_READONLY | ES_AUTOHSCROLL, IDC_VAL_PATH,
                              0, 0, 0, 0);
     g_controls.valRate = make_ctl(parent, 0, L"STATIC", L"\u2014", 0,
@@ -865,10 +376,22 @@ static void create_controls(HWND parent)
     SetWindowTheme(g_controls.btnLang, L"", L"");
     SetWindowTheme(g_controls.btnTheme, L"", L"");
     SetWindowTheme(g_controls.btnPair, L"", L"");
+
+    /* Mode bar (A2): owner-drawn buttons; the active one is painted with
+     * color and border (Q-078, WCAG 1.4.1). */
+    g_controls.btnModeLibrary = make_ctl(parent, 0, L"BUTTON", tr(STR_MODE_LIBRARY),
+                                  BS_OWNERDRAW, IDC_BTN_MODE_LIBRARY, 0, 0, 0, 0);
+    g_controls.btnModeSettings = make_ctl(parent, 0, L"BUTTON", tr(STR_MODE_SETTINGS),
+                                   BS_OWNERDRAW, IDC_BTN_MODE_SETTINGS, 0, 0, 0, 0);
+
     g_controls.progress = make_ctl(parent, 0, PROGRESS_CLASS_NAME, L"",
                               0, IDC_PROGRESS, 0, 0, 0, 0);
     g_controls.valState = make_ctl(parent, 0, L"STATIC", L"Estado: Detenido",
                               SS_RIGHT, IDC_VAL_STATE, 0, 0, 0, 0);
+    /* Short system message to the right of state. */
+    g_controls.valSystem = make_ctl(parent, 0, L"STATIC", L"",
+                               SS_LEFT, IDC_VAL_SYSTEM, 0, 0, 0, 0);
+    ShowWindow(g_controls.valSystem, SW_HIDE);   /* no message at startup */
     g_controls.valTime = make_ctl(parent, 0, L"STATIC", L"0:00.000 / 0:00.000",
                              0, IDC_VAL_TIME, 0, 0, 0, 0);
     g_controls.checkLoop = make_ctl(parent, 0, L"BUTTON", tr(STR_CHECK_LOOP),
@@ -890,8 +413,10 @@ static void create_controls(HWND parent)
                                    (HMENU)(INT_PTR)2, GetModuleHandleW(NULL),
                                    NULL);
     SendMessageW(g_controls.status, WM_SETFONT, (WPARAM)g_font, TRUE);
+    /* The status bar uses the app's normal font, not the large one. */
 
-    layout();
+    g_active_mode = -1;
+    set_active_mode(0);   /* A2: opens Library and sets up the initial layout */
     EnableWindow(g_controls.btnPlay, FALSE);
     EnableWindow(g_controls.btnPrevious, FALSE);
     EnableWindow(g_controls.btnNext, FALSE);
@@ -902,178 +427,6 @@ static void create_controls(HWND parent)
 }
 
 /* ----------------------------------------------------------------- UI --- */
-
-/* Apply a speed button: send it to the engine and update the label at once
- * (the 100 ms timer would catch up anyway, but immediate feedback is what a
- * click should feel like). Only two fixed speeds exist by design: 1,0x and
- * the observed FLSM factor (AGENTS/requirements: no arbitrary slider). */
-static void apply_speed(uint32_t ppm)
-{
-    wchar_t buf[40];
-    player_set_speed(g_player, ppm);
-    format_speed(buf, 40, ppm);
-    SetWindowTextW(g_controls.valSpeed, buf);
-}
-
-/* One full UI refresh from a fresh snapshot; runs every UI_TICK_MS and
- * after every command. Deliberately idempotent: SetWindowText is only called
- * when the text actually changed, so the 10 Hz polling does not churn
- * redraws or fight the user. Sections: state text, button enables, version
- * (pair) caption, loop checkbox, device/speed labels, progress repaint, time
- * display, one-shot error messages. */
-static void update_ui(void)
-{
-    PlayerSnapshot s = player_get_state(g_player);
-    const wchar_t *stateText;
-    wchar_t buf[160], t1[40], t2[40];
-    double devRate;
-
-    g_player_snapshot = s;
-
-    switch (s.state) {
-    case PLAYER_PLAYING:
-        stateText = tr(STR_STATE_PLAYING);
-        break;
-    case PLAYER_PAUSED:
-        stateText = tr(STR_STATE_PAUSED);
-        break;
-    case PLAYER_FINISHED:
-        stateText = tr(STR_STATE_FINISHED);
-        break;
-    default:
-        stateText = tr(STR_STATE_STOPPED);
-        break;
-    }
-    {
-        wchar_t cur[64];
-        GetWindowTextW(g_controls.valState, cur, 64);
-        if (wcscmp(cur, stateText) != 0)
-            SetWindowTextW(g_controls.valState, stateText);
-    }
-
-    /* The single transport button announces what the NEXT click does. */
-    {
-        const wchar_t *playText;
-        wchar_t curPlay[32];
-        TransportLogicalState ls = transport_logical_state(s.state, s.speed_ppm == PLAYER_FLSM_SPEED_PPM,
-                                                           s.pair_sel, s.pair_count);
-        if (ls.playing)
-            playText = tr(STR_BUTTON_PAUSE);
-        else if (ls.paused)
-            playText = tr(STR_BUTTON_RESUME);
-        else if (ls.finished)
-            playText = tr(STR_BUTTON_REPLAY);
-        else
-            playText = tr(STR_BUTTON_PLAY);
-        GetWindowTextW(g_controls.btnPlay, curPlay, 32);
-        if (wcscmp(curPlay, playText) != 0)
-            SetWindowTextW(g_controls.btnPlay, playText);
-    }
-    EnableWindow(g_controls.btnPlay, g_library.selected_index >= 0);
-    EnableWindow(g_controls.btnPrevious, g_library.selected_index >= 0 && s.total_samples > 0);
-    EnableWindow(g_controls.btnNext, g_library.selected_index >= 0 && g_library.count > 1);
-    EnableWindow(g_controls.btnRemove, g_library.count > 0);
-    EnableWindow(g_controls.btnClear, g_library.count > 0);
-
-    /* Speed button: caption is the mode in force (like the version button). */
-    {
-        wchar_t speedText[64], cur[64];
-        TransportLogicalState speedState = transport_logical_state(s.state,
-            s.speed_ppm == PLAYER_FLSM_SPEED_PPM, s.pair_sel, s.pair_count);
-        if (speedState.speed_flsm)
-            wcscpy(speedText, tr(STR_SPEED_FLSM));
-        else if (s.speed_ppm == PLAYER_SPEED_SCALE)
-            wcscpy(speedText, tr(STR_SPEED_NORMAL));
-        else {
-            format_speed(buf, 40, s.speed_ppm);
-            swprintf(speedText, 64, L"%s", buf);
-        }
-        GetWindowTextW(g_controls.btnSpeed, cur, 64);
-        if (wcscmp(cur, speedText) != 0)
-            SetWindowTextW(g_controls.btnSpeed, speedText);
-    }
-
-    /* Version button: its caption is the current selection. */
-    {
-        wchar_t pairText[64], cur[64];
-        const wchar_t *want;
-        if (s.channels == 0) {
-            want = tr(STR_NO_TRACK_VALUE);
-        } else if (s.pair_count == 0) {
-            want = tr(STR_VERSION_STEREO);
-        } else {
-            int pair = s.pair_sel < 0 ? 0 : s.pair_sel;
-            swprintf(pairText, 64, tr(STR_VERSION_CAPTION),
-                     pair + 1, pair * 2 + 1, pair * 2 + 2);
-            want = pairText;
-        }
-        GetWindowTextW(g_controls.btnPair, cur, 64);
-        if (wcscmp(cur, want) != 0)
-            SetWindowTextW(g_controls.btnPair, want);
-        EnableWindow(g_controls.btnPair, s.pair_count > 0);
-    }
-
-    if (s.file_loop)
-        SendMessageW(g_controls.checkLoop, BM_SETCHECK,
-                     s.loop_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
-
-    devRate = s.sample_rate ? (double)s.device_rate : 0.0;
-    if (s.sample_rate) {
-        if (s.audio_folded || s.pair_sel >= 0)
-            swprintf(buf, 160, tr(STR_DEVICE_RATE_STEREO), s.device_rate);
-        else
-            swprintf(buf, 160, tr(STR_DEVICE_RATE), s.device_rate);
-        SetWindowTextW(g_controls.valDevRate, buf);
-        format_speed(buf, 40, s.speed_ppm);
-        SetWindowTextW(g_controls.valSpeed, buf);
-    } else {
-        SetWindowTextW(g_controls.valDevRate, tr(STR_DEVICE_RATE_EMPTY));
-    }
-
-    if (g_progress_position != s.position || g_progress_total != s.total_samples ||
-        g_progress_has_loop != s.file_loop ||
-        g_progress_loop_start != s.loop_start) {
-        g_progress_position = s.position;
-        g_progress_total = s.total_samples;
-        g_progress_has_loop = s.file_loop;
-        g_progress_loop_start = s.loop_start;
-        InvalidateRect(g_controls.progress, NULL, FALSE);
-    }
-    if (s.total_samples > 0) {
-        format_time(t1, 40, devRate > 0 ? (double)s.position / devRate : 0.0);
-        format_time(t2, 40, devRate > 0
-                          ? (double)s.total_samples / devRate : 0.0);
-        swprintf(buf, 160, L"%s / %s", t1, t2);
-        SetWindowTextW(g_controls.valTime, buf);
-    } else {
-        SetWindowTextW(g_controls.valTime, L"0:00.000 / 0:00.000");
-    }
-
-    if (s.audio_error != 0 && s.audio_error != g_last_reported_error) {
-        wchar_t werr[256], msg[320];
-        waveOutGetErrorTextW(s.audio_error, werr, 256);
-        swprintf(msg, 320, tr(STR_AUDIO_OUTPUT_ERROR), werr);
-        set_status(msg);
-        g_last_reported_error = s.audio_error;
-    }
-    if (s.decode_failed && !g_decode_reported) {
-        set_status(tr(STR_STATE_DECODE_ERROR));
-        g_decode_reported = 1;
-    }
-}
-
-/* Move the selection to `idx` through the same handler a real click uses
- * and resume playback if the user was listening - the shared body of the
- * previous/next transport buttons. */
-static void change_track(int idx, int wasPlaying)
-{
-    ListView_SetItemState(g_controls.list, idx, LVIS_SELECTED | LVIS_FOCUSED,
-                          LVIS_SELECTED | LVIS_FOCUSED);
-    if (g_library.selected_index != idx)
-        select_track(idx); /* no LVN_ITEMCHANGED when the row does not change */
-    if (wasPlaying && player_get_state(g_player).state != PLAYER_PLAYING)
-        player_play(g_player);
-}
 
 /* Command router: WM_COMMAND (button/menu/accelerator ids) to actions.
  * Each case does its own status message; update_ui() at the end re-syncs
@@ -1105,6 +458,12 @@ static void on_command(int id)
         break;
     case IDM_THEME_DARK:
         set_theme(THEME_DARK);
+        break;
+    case IDC_BTN_MODE_LIBRARY:
+        set_active_mode(0);
+        break;
+    case IDC_BTN_MODE_SETTINGS:
+        set_active_mode(2);
         break;
     case IDC_BTN_REMOVE:
         if (g_library.selected_index >= 0)
@@ -1215,46 +574,6 @@ static void load_saved_language(void)
     strings_set_language(lang);
 }
 
-/* Language picker opened from the globe button. Built on each click so its
- * labels and the marked language always match the language in force. */
-static void show_language_menu(HWND owner)
-{
-    POINT pt;
-    HMENU menu = CreatePopupMenu();
-    if (!menu)
-        return;
-    AppendMenuW(menu, MF_STRING, IDM_LANG_EN, tr(STR_MENU_ENGLISH));
-    AppendMenuW(menu, MF_STRING, IDM_LANG_ES, tr(STR_MENU_SPANISH));
-    CheckMenuRadioItem(menu, IDM_LANG_EN, IDM_LANG_ES,
-                       strings_language() == STR_LANG_ES ? IDM_LANG_ES : IDM_LANG_EN,
-                       MF_BYCOMMAND);
-    GetCursorPos(&pt);
-    SetForegroundWindow(owner);
-    TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, owner, NULL);
-    DestroyMenu(menu);
-}
-
-/* Theme picker opened from the theme button. Built on each click so the
- * marked item always matches the saved choice. */
-static void show_theme_menu(HWND owner)
-{
-    POINT pt;
-    HMENU menu = CreatePopupMenu();
-    UINT checked = g_theme_choice == THEME_LIGHT ? IDM_THEME_LIGHT
-                 : g_theme_choice == THEME_DARK  ? IDM_THEME_DARK
-                 : IDM_THEME_SYSTEM;
-    if (!menu)
-        return;
-    AppendMenuW(menu, MF_STRING, IDM_THEME_SYSTEM, tr(STR_MENU_THEME_SYSTEM));
-    AppendMenuW(menu, MF_STRING, IDM_THEME_LIGHT, tr(STR_MENU_THEME_LIGHT));
-    AppendMenuW(menu, MF_STRING, IDM_THEME_DARK, tr(STR_MENU_THEME_DARK));
-    CheckMenuRadioItem(menu, IDM_THEME_SYSTEM, IDM_THEME_DARK, checked, MF_BYCOMMAND);
-    GetCursorPos(&pt);
-    SetForegroundWindow(owner);
-    TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, owner, NULL);
-    DestroyMenu(menu);
-}
-
 /* Writes the static caption of every control that create_controls() labels
  * with tr(). Controls whose text update_ui() owns (state, speed, version,
  * device, time) are not touched here: update_ui() rewrites them on the next
@@ -1262,6 +581,8 @@ static void show_theme_menu(HWND owner)
 static void relabel_controls(void)
 {
     SetWindowTextW(g_controls.groupLib, tr(STR_LIBRARY_GROUP));
+    SetWindowTextW(g_controls.btnModeLibrary, tr(STR_MODE_LIBRARY));
+    SetWindowTextW(g_controls.btnModeSettings, tr(STR_MODE_SETTINGS));
     SetWindowTextW(g_controls.btnOpen, tr(STR_BUTTON_OPEN));
     SetWindowTextW(g_controls.btnRemove, tr(STR_BUTTON_REMOVE));
     SetWindowTextW(g_controls.btnClear, tr(STR_BUTTON_CLEAR));
@@ -1395,6 +716,63 @@ static void set_theme(ThemeChoice choice)
     apply_theme();
 }
 
+/* A2: activates a mode. Only the central block changes; the mode bar and
+ * transport controls stay visible. The active mode is marked with color and
+ * border when painted (WM_DRAWITEM). */
+void set_active_mode(int mode)
+{
+    if (g_active_mode == mode)
+        return;
+    g_active_mode = mode;
+
+    int bib = (mode == 0);   /* Library: list + card + version */
+
+    ctl_show(g_controls.btnOpen, bib);
+    ctl_show(g_controls.btnRemove, bib);
+    ctl_show(g_controls.btnClear, bib);
+    ctl_show(g_controls.groupLib, bib);
+    ctl_show(g_controls.list, bib);
+    ctl_show(g_controls.groupInfo, bib);
+    ctl_show(g_controls.valName, bib);
+    ctl_show(g_controls.valPath, bib);
+    ctl_show(g_controls.capRate, bib);
+    ctl_show(g_controls.valRate, bib);
+    ctl_show(g_controls.capCh, bib);
+    ctl_show(g_controls.valCh, bib);
+    ctl_show(g_controls.capDur, bib);
+    ctl_show(g_controls.valDur, bib);
+    ctl_show(g_controls.capLoop, bib);
+    ctl_show(g_controls.valLoop, bib);
+    ctl_show(g_controls.groupSpeed, bib);
+    ctl_show(g_controls.valSpeed, bib);
+    ctl_show(g_controls.valDevRate, bib);
+    ctl_show(g_controls.btnSpeed, bib);
+    ctl_show(g_controls.btnPair, bib);
+    ctl_show(g_controls.capVer, bib);
+
+    /* Fields the banner card (B1) does not show. */
+    ctl_show(g_controls.capSamples, 0);
+    ctl_show(g_controls.valSamples, 0);
+    ctl_show(g_controls.capLoopSt, 0);
+    ctl_show(g_controls.valLoopSt, 0);
+    ctl_show(g_controls.capLoopEnd, 0);
+    ctl_show(g_controls.valLoopEnd, 0);
+
+    layout();
+    RedrawWindow(g_hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ALLCHILDREN);
+}
+
+/* B2: writes the short system message (errors and confirmations) to the
+ * right of the big state text. Empty = no message. */
+void set_system_message(const wchar_t *text)
+{
+    if (!g_controls.valSystem)
+        return;
+    SetWindowTextW(g_controls.valSystem, text);
+    /* Without text, the gap does not look like a stray block. */
+    ShowWindow(g_controls.valSystem, (text && text[0]) ? SW_SHOW : SW_HIDE);
+}
+
 /* Switches the language at runtime: saves the choice, relabels every control,
  * and refreshes the dynamic texts through update_ui(). */
 static void set_language(StrLanguage lang)
@@ -1494,6 +872,40 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             }
             return TRUE;
         }
+        /* Mode buttons (A2): the active one is painted with accent color and
+         * border (Q-078, WCAG 1.4.1); inactive ones use the surface. */
+        if (dis->CtlID == IDC_BTN_MODE_LIBRARY
+            || dis->CtlID == IDC_BTN_MODE_SETTINGS) {
+            int active = (dis->CtlID == IDC_BTN_MODE_LIBRARY && g_active_mode == 0)
+                      || (dis->CtlID == IDC_BTN_MODE_SETTINGS && g_active_mode == 2);
+            HBRUSH modeFace = CreateSolidBrush(active ? UI_C_ACENTO : UI_C_SUPERFICIE);
+            FillRect(dis->hDC, &dis->rcItem, modeFace);
+            DeleteObject(modeFace);
+            if (active) {
+                HPEN pen = CreatePen(PS_SOLID, 2, UI_C_BORDE);
+                HPEN old_pen = (HPEN)SelectObject(dis->hDC, pen);
+                HBRUSH old_brush = (HBRUSH)SelectObject(dis->hDC,
+                    GetStockObject(NULL_BRUSH));
+                Rectangle(dis->hDC, dis->rcItem.left, dis->rcItem.top,
+                          dis->rcItem.right, dis->rcItem.bottom);
+                SelectObject(dis->hDC, old_brush);
+                SelectObject(dis->hDC, old_pen);
+                DeleteObject(pen);
+            }
+            wchar_t text[64];
+            GetWindowTextW(dis->hwndItem, text, 64);
+            SetBkMode(dis->hDC, TRANSPARENT);
+            SetTextColor(dis->hDC, active ? RGB(0xFF, 0xFF, 0xFF) : UI_C_PRIMARIO);
+            SelectObject(dis->hDC, g_font);
+            DrawTextW(dis->hDC, text, -1, &dis->rcItem,
+                      DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            if (dis->itemState & ODS_FOCUS) {
+                RECT focus = dis->rcItem;
+                InflateRect(&focus, -3, -3);
+                DrawFocusRect(dis->hDC, &focus);
+            }
+            return TRUE;
+        }
         switch (dis->CtlID) {
         case IDC_BTN_PLAY: {
             TransportLogicalState ls = transport_logical_state(g_player_snapshot.state,
@@ -1531,7 +943,11 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         HDC hdc = (HDC)wp;
         HWND ctl = (HWND)lp;
         SetBkMode(hdc, TRANSPARENT);
-        SetBkColor(hdc, UI_C_SUPERFICIE);
+        /* Default: window background (UI_C_FONDO), no box. So labels,
+         * read-only values, group titles and the loop checkbox do not look
+         * like highlighted boxes. */
+        HBRUSH brush = g_brushBg;
+        SetBkColor(hdc, UI_C_FONDO);
         if (ctl == g_controls.valState) {
             PlayerState st = g_player_snapshot.state;
             COLORREF c = g_ui_theme_dark ? UI_STATE_DARK_LOADING : UI_STATE_LIGHT_LOADING;
@@ -1542,10 +958,22 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             else if (st == PLAYER_FINISHED)
                 c = g_ui_theme_dark ? UI_STATE_DARK_FINISHED : UI_STATE_LIGHT_FINISHED;
             SetTextColor(hdc, c);
+        } else if (ctl == g_controls.valSystem) {
+            SetTextColor(hdc, UI_C_SECUNDARIO);
         } else {
             SetTextColor(hdc, UI_C_PRIMARIO);
         }
-        return (LRESULT)g_brushFace;
+        /* Action and mode buttons keep their surface and border. */
+        if (ctl == g_controls.btnOpen || ctl == g_controls.btnRemove
+            || ctl == g_controls.btnClear || ctl == g_controls.btnPrevious
+            || ctl == g_controls.btnPlay || ctl == g_controls.btnNext
+            || ctl == g_controls.btnLang || ctl == g_controls.btnTheme
+            || ctl == g_controls.btnSpeed || ctl == g_controls.btnPair
+            || ctl == g_controls.btnModeLibrary || ctl == g_controls.btnModeSettings) {
+            brush = g_brushFace;
+            SetBkColor(hdc, UI_C_SUPERFICIE);
+        }
+        return (LRESULT)brush;
     }
 
     case WM_DESTROY:

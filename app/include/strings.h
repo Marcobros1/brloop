@@ -1,6 +1,7 @@
 #ifndef STRINGS_H
 #define STRINGS_H
 
+#include <stdint.h>
 #include <wchar.h>
 
 /* User-visible text lookup. Every label, caption and message in the window is
@@ -29,7 +30,7 @@ typedef enum {
     X(STR_FILE_INFO_GROUP,      L"Información del archivo",    L"File information") \
     X(STR_CAP_NAME,             L"Nombre:",                    L"Name:") \
     X(STR_CAP_CHANNELS,         L"Canales:",                   L"Channels:") \
-    X(STR_CAP_RATE,             L"Frecuencia:",                L"Sample rate:") \
+    X(STR_CAP_RATE,             L"Hz:",                        L"Hz:") \
     X(STR_CAP_DURATION,         L"Duración:",                  L"Duration:") \
     X(STR_CAP_SAMPLES,          L"Muestras:",                  L"Samples:") \
     X(STR_CAP_LOOP,             L"Loop:",                      L"Loop:") \
@@ -38,6 +39,9 @@ typedef enum {
     X(STR_CAP_PATH,             L"Ruta:",                      L"Path:") \
     X(STR_CAP_VERSION,          L"Versión:",                   L"Version:") \
     X(STR_PLAY_GROUP,           L"Reproducción",               L"Playback") \
+    X(STR_MODE_LIBRARY,         L"Biblioteca",                 L"Library") \
+    X(STR_MODE_VERSIONS,        L"Versiones",                  L"Versions") \
+    X(STR_MODE_SETTINGS,        L"Ajustes",                    L"Settings") \
     X(STR_BUTTON_PLAY,          L"Reproducir",                 L"Play") \
     X(STR_BUTTON_PAUSE,         L"Pausar",                     L"Pause") \
     X(STR_BUTTON_RESUME,        L"Reanudar",                   L"Resume") \
@@ -53,6 +57,8 @@ typedef enum {
     X(STR_STATE_PAUSED,         L"Estado: Pausado",            L"Status: Paused") \
     X(STR_STATE_FINISHED,       L"Estado: Terminado",          L"Status: Finished") \
     X(STR_STATUS_READY,         L"Listo.",                     L"Ready.") \
+    X(STR_SYS_OPENED,           L"Abierto: %s",                L"Opened: %s") \
+    X(STR_SYS_ERROR,            L"Error: %s",                  L"Error: %s") \
     X(STR_LOOP_YES,             L"Sí",                         L"Yes") \
     X(STR_LOOP_NO,              L"No",                         L"No") \
     X(STR_LOOP_UNAVAILABLE,     L"No disponible",              L"Not available") \
@@ -119,5 +125,10 @@ StrLanguage strings_language(void);
 
 /* Returns the text for the active language. Never returns NULL. */
 const wchar_t *tr(StrKey key);
+
+/* Formats a speed in PPM as "whole,frac×" (>=2 decimals, trailing zeros
+ * trimmed, comma separator). Pure text: receives data, returns a result, no
+ * HWND and no locale dependency. */
+void format_speed(wchar_t *out, size_t n, uint32_t ppm);
 
 #endif /* STRINGS_H */

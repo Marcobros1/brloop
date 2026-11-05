@@ -49,6 +49,13 @@
 #define IDM_THEME_LIGHT   1061
 #define IDM_THEME_DARK    1062
 
+/* Mode bar (A2): Library / Settings. */
+#define IDC_BTN_MODE_LIBRARY  1101
+#define IDC_BTN_MODE_SETTINGS 1103
+
+/* Short system message (B2), to the right of the big state text. */
+#define IDC_VAL_SYSTEM        1104
+
 #define TIMER_UI 1
 #define UI_TICK_MS 100
 #define PROGRESS_CLASS_NAME L"MkwProgress"
@@ -83,12 +90,13 @@ typedef struct {
     HWND btnOpen, btnRemove, btnClear;
     HWND btnPlay, btnPrevious, btnNext, btnLang, btnTheme;
     HWND btnSpeed, btnPair;
+    HWND btnModeLibrary, btnModeSettings;
     HWND checkLoop, progress;
     HWND capName, capCh, capRate, capDur, capSamples, capLoop, capLoopSt;
     HWND capLoopEnd;
     HWND capPath, capVer;
     HWND valName, valPath, valRate, valCh, valSamples, valDur;
-    HWND valLoop, valLoopSt, valState, valTime, valSpeed, valDevRate;
+    HWND valLoop, valLoopSt, valState, valSystem, valTime, valSpeed, valDevRate;
     HWND valLoopEnd;
 } Controls;
 

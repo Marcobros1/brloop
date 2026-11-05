@@ -1,0 +1,17 @@
+core/src/brstm.c
+core/src/dsp_adpcm.c
+app/src/player.c
+app/src/audio_out.c
+app/src/cli_options.c
+app/src/library.c
+app/src/transport.c
+app/src/resampler.c
+app/src/strings.c
+app/src/settings.c
+app/src/ui_selftest.c
+app/src/icons.c
+app/src/main.c
+app/src/ui_state.c
+app/src/ui_layout.c
+app/src/ui_library.c
+app/src/ui_dialogs.c

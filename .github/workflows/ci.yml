@@ -73,12 +73,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $dbg | Out-Null
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           $bat = Join-Path $cov 'debug.bat'
-          $srcFiles = @(
-            'core\src\brstm.c', 'core\src\dsp_adpcm.c', 'app\src\player.c', 'app\src\audio_out.c',
-            'app\src\cli_options.c', 'app\src\library.c', 'app\src\transport.c', 'app\src\resampler.c',
-            'app\src\strings.c', 'app\src\settings.c', 'app\src\ui_selftest.c', 'app\src\icons.c',
-            'app\src\main.c'
-          ) | ForEach-Object { '"' + (Join-Path $root $_) + '"' }
+          $srcFiles = Get-Content (Join-Path $root 'app\sources.txt') | Where-Object { $_.Trim() } | ForEach-Object { '"' + (Join-Path $root $_) + '"' }
           $srcArgs = $srcFiles -join ' '
           @(
             '@echo off',
@@ -125,6 +120,13 @@ jobs:
           $ErrorActionPreference = 'Continue'
           & $oc --modules "$dbg*" --sources "$root\app\src*" --export_type "cobertura:$xml" -- (Join-Path $dbg 'brloop.exe') --selftest $stereo $quad --invalid $bad --report $report | Out-Null
           $selftest = $LASTEXITCODE
+          Write-Host "EXIT=$selftest"
+          if (Test-Path $report) {
+              Get-Content $report -Tail 5
+          } else {
+              Write-Host 'NO REPORT'
+              Get-ChildItem $cov
+          }
           $ErrorActionPreference = 'Stop'
           # Print the whole report so a failing check is visible in the log.
           Get-Content $report
