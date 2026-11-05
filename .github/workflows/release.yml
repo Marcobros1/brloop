@@ -40,6 +40,27 @@ jobs:
           v="${GITHUB_REF_NAME#v}"
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
+      - name: Check the version files match the tag
+        shell: bash
+        run: |
+          v="${{ steps.version.outputs.version }}"
+          # The tag commit must already carry this version: the workflow never
+          # writes it, so the binary comes from the reviewed commit on main.
+          fail=0
+          check() {
+            if ! grep -q -- "$2" "$1"; then
+              echo "::error file=$1::Version $v is missing here: expected $2"
+              fail=1
+            fi
+          }
+          check app/src/brloop.rc "VALUE \"FileVersion\", \"$v\""
+          check app/src/brloop.rc "VALUE \"ProductVersion\", \"$v\""
+          check app/src/brloop.rc "FILEVERSION ${v//./,},0"
+          check app/src/brloop.rc "PRODUCTVERSION ${v//./,},0"
+          check app/src/brloop.manifest "version=\"$v.0\""
+          check sonar-project.properties "sonar.projectVersion=$v"
+          exit $fail
+
       - name: Build core tools
         shell: pwsh
         run: powershell -ExecutionPolicy Bypass -File core\build.ps1
