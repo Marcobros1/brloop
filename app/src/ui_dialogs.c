@@ -105,4 +105,3 @@ void browse_files(void)
         set_status(sum);
     }
 }
-
