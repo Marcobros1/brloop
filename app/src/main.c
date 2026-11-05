@@ -37,6 +37,7 @@
 #include "ui_state.h"
 #include "ui_layout.h"
 #include "ui_library.h"
+#include "ui_dialogs.h"
 
 /* Forward declarations: functions defined in other modules that main.c calls.
  * ui_state.h externs the shared globals; these are the helpers main.c needs. */
@@ -120,8 +121,6 @@ void format_time(wchar_t *out, size_t n, double sec)
  * marker line shows the loop start, so both loop points are visible while
  * the song plays. Paint state is UI-thread-only (set in update_ui). */
 static void set_language(StrLanguage lang);
-static void show_language_menu(HWND owner);
-static void show_theme_menu(HWND owner);
 static void set_theme(ThemeChoice choice);
 
 /* Seek: click (or drag end) on the bar jumps to that source position. */
@@ -573,46 +572,6 @@ static void load_saved_language(void)
     StrLanguage lang = STR_LANG_EN;
     g_settings_status = settings_load_language(&lang);
     strings_set_language(lang);
-}
-
-/* Language picker opened from the globe button. Built on each click so its
- * labels and the marked language always match the language in force. */
-static void show_language_menu(HWND owner)
-{
-    POINT pt;
-    HMENU menu = CreatePopupMenu();
-    if (!menu)
-        return;
-    AppendMenuW(menu, MF_STRING, IDM_LANG_EN, tr(STR_MENU_ENGLISH));
-    AppendMenuW(menu, MF_STRING, IDM_LANG_ES, tr(STR_MENU_SPANISH));
-    CheckMenuRadioItem(menu, IDM_LANG_EN, IDM_LANG_ES,
-                       strings_language() == STR_LANG_ES ? IDM_LANG_ES : IDM_LANG_EN,
-                       MF_BYCOMMAND);
-    GetCursorPos(&pt);
-    SetForegroundWindow(owner);
-    TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, owner, NULL);
-    DestroyMenu(menu);
-}
-
-/* Theme picker opened from the theme button. Built on each click so the
- * marked item always matches the saved choice. */
-static void show_theme_menu(HWND owner)
-{
-    POINT pt;
-    HMENU menu = CreatePopupMenu();
-    UINT checked = g_theme_choice == THEME_LIGHT ? IDM_THEME_LIGHT
-                 : g_theme_choice == THEME_DARK  ? IDM_THEME_DARK
-                 : IDM_THEME_SYSTEM;
-    if (!menu)
-        return;
-    AppendMenuW(menu, MF_STRING, IDM_THEME_SYSTEM, tr(STR_MENU_THEME_SYSTEM));
-    AppendMenuW(menu, MF_STRING, IDM_THEME_LIGHT, tr(STR_MENU_THEME_LIGHT));
-    AppendMenuW(menu, MF_STRING, IDM_THEME_DARK, tr(STR_MENU_THEME_DARK));
-    CheckMenuRadioItem(menu, IDM_THEME_SYSTEM, IDM_THEME_DARK, checked, MF_BYCOMMAND);
-    GetCursorPos(&pt);
-    SetForegroundWindow(owner);
-    TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, owner, NULL);
-    DestroyMenu(menu);
 }
 
 /* Writes the static caption of every control that create_controls() labels

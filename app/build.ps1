@@ -77,7 +77,7 @@ $sourcesTxt = Join-Path $repo 'app\sources.txt'
 $srcAll = Get-Content $sourcesTxt | Where-Object { $_.Trim() } | ForEach-Object { Join-Path $repo $_ }
 # UI/window-only code (needs GDI): linked into brloop.exe only; the headless
 # test build must not pull it in.
-$windowUi = @('ui_selftest.c','icons.c','main.c','ui_state.c','ui_layout.c','ui_library.c')
+$windowUi = @('ui_selftest.c','icons.c','main.c','ui_state.c','ui_layout.c','ui_library.c','ui_dialogs.c')
 $srcCommon = $srcAll | Where-Object { $windowUi -notcontains [IO.Path]::GetFileName($_) }
 $srcUi = $srcAll | Where-Object { $windowUi -contains [IO.Path]::GetFileName($_) }
 # /utf-8: source and wide literals are UTF-8 (Spanish UI strings);

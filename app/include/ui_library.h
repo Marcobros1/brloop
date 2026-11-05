@@ -9,9 +9,6 @@ int add_track(const wchar_t *path, wchar_t *errbuf, size_t errlen);
 void remove_track(int idx);
 void remove_all(void);
 
-/* File dialog: multi-select, validates each file with add_track. */
-void browse_files(void);
-
 /* Info panel: clear, fill from a snapshot, and select a track. */
 void clear_info_panel(void);
 void fill_info_panel(const PlayerSnapshot *s);

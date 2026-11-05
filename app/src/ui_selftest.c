@@ -8,8 +8,11 @@
 
 #include "ui_selftest.h"
 #include "ui_state.h"
+#include "ui_layout.h"
+#include "ui_library.h"
 #include "transport.h"
 #include "strings.h"
+#include <winreg.h>
 
 /* The hidden window owns the state passed in UiSelfTestContext. This private
  * pointer avoids threading a large context through every phase helper. */
@@ -200,6 +203,80 @@ static void st_phase_modes_theme(void)
     st_check(g_theme_choice == THEME_SYSTEM, "tema vuelve al sistema");
 }
 
+/* Defensive branches: out-of-range indexes must not move state, and the
+ * system-theme decision must follow AppsUseLightTheme. The registry value is
+ * toggled, the system-change notification is sent to the real window, and the
+ * original value is restored at the end. */
+static void st_phase_defensive(void)
+{
+    int sel = (*g_test->selected);
+    int count = (*g_test->row_count);
+
+    /* select_track() with an out-of-range index keeps the selection. */
+    select_track(-1);
+    st_check((*g_test->selected) == sel, "select_track(-1) keeps the selection");
+    select_track(count);
+    st_check((*g_test->selected) == sel, "select_track(count) keeps the selection");
+
+    /* remove_track() with an out-of-range index keeps the library. */
+    remove_track(-1);
+    st_check((*g_test->row_count) == count && (*g_test->selected) == sel,
+             "remove_track(-1) keeps the library");
+    remove_track(count);
+    st_check((*g_test->row_count) == count && (*g_test->selected) == sel,
+             "remove_track(count) keeps the library");
+
+    /* system_theme_is_dark() (main.c:52-63) reads AppsUseLightTheme: flip the
+     * value, notify the system theme change through the real window, check the
+     * UI flag follows, and restore the original theme state at the end
+     * (including the read-error path, main.c:60-61). */
+    {
+        HKEY hk;
+        LSTATUS st = RegOpenKeyExW(HKEY_CURRENT_USER,
+            L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+            0, KEY_SET_VALUE | KEY_QUERY_VALUE, &hk);
+        if (st == ERROR_SUCCESS) {
+            DWORD original = 0, originalSize = sizeof original, type = 0;
+            int had = RegGetValueW(hk, L"AppsUseLightTheme", NULL, RRF_RT_REG_DWORD,
+                                   &type, &original, &originalSize) == ERROR_SUCCESS;
+            int originalDark = g_ui_theme_dark;
+            DWORD restoreValue = originalDark ? 0u : 1u;
+
+            DWORD toggled = originalDark ? 1u : 0u;
+            RegSetValueExW(hk, L"AppsUseLightTheme", 0, REG_DWORD,
+                           (const BYTE *)&toggled, sizeof toggled);
+            SendMessageW(g_test->window, WM_SETTINGCHANGE, 0,
+                         (LPARAM)L"ImmersiveColorSet");
+            st_check(g_ui_theme_dark == (toggled == 0 ? 1 : 0),
+                     "system theme follows AppsUseLightTheme");
+
+            if (had) {
+                RegSetValueExW(hk, L"AppsUseLightTheme", 0, REG_DWORD,
+                               (const BYTE *)&original, sizeof original);
+                SendMessageW(g_test->window, WM_SETTINGCHANGE, 0,
+                             (LPARAM)L"ImmersiveColorSet");
+                st_check(g_ui_theme_dark == originalDark,
+                         "system theme restored after the toggle");
+            } else {
+                RegDeleteValueW(hk, L"AppsUseLightTheme");
+                SendMessageW(g_test->window, WM_SETTINGCHANGE, 0,
+                             (LPARAM)L"ImmersiveColorSet");
+                st_check(g_ui_theme_dark == 0,
+                         "unreadable AppsUseLightTheme keeps the light theme");
+            }
+            RegSetValueExW(hk, L"AppsUseLightTheme", 0, REG_DWORD,
+                           (const BYTE *)&restoreValue, sizeof restoreValue);
+            SendMessageW(g_test->window, WM_SETTINGCHANGE, 0,
+                         (LPARAM)L"ImmersiveColorSet");
+            st_check(g_ui_theme_dark == originalDark,
+                     "system theme restored at the end of the phase");
+            RegCloseKey(hk);
+        } else {
+            st_check(0, "could not open the system theme key");
+        }
+    }
+}
+
 /* Phase 1c - biblioteca CRUD: añadir, seleccionar y quitar pistas usando los
  * ficheros sintéticos que llegan por la línea de comandos. Se ejecuta antes
  * de arrancar el transporte, con la biblioteca ya cargada y nada reproduciendo. */
@@ -211,6 +288,16 @@ static void st_phase_library_crud(void)
     if (before < 2) {
         st_check(0, "se necesitan al menos 2 pistas sintéticas para CRUD");
         return;
+    }
+
+    /* list_insert_row se ejecuta por add_track (ui_library.c:204) cada vez que
+     * una pista entra en la biblioteca. Compruebo que la fila realmente aparece
+     * en el ListView, no solo en el array, para cerrar el 0 de cobertura que
+     * reportaba OpenCppCoverage sobre esta función. */
+    {
+        int rows = ListView_GetItemCount((*g_test->controls).list);
+        st_check(rows == before && rows >= 2,
+                 "list_insert_row insertó la fila de cada pista añadida");
     }
 
     /* Seleccionar la segunda pista (mismo handler que un clic en la lista). */
@@ -290,6 +377,77 @@ static void st_phase_previous_wrap(void)
     pump(50);
     st_check((*g_test->selected) == 0 && (*g_test->snapshot).sample_rate > 0,
              "vuelve a la primera pista antes del transporte");
+}
+
+/* Phase 1e - library error paths without audio: a file that disappears after
+ * it was added makes select_track() fail to open it (status bar and banner
+ * show the error and the player stays closed), and a file that is not a
+ * BRSTM is refused by add_track() with a named message. Restores the first
+ * row afterwards so the transport phases start from the usual state. */
+static void st_phase_library_errors(void)
+{
+    wchar_t err[1024] = L"";
+    wchar_t bar[256] = L"";
+    wchar_t gone[MAX_PATH] = L"";
+    wchar_t tmp[MAX_PATH];
+    int rc;
+    int before;
+
+    /* A file that is not a valid BRSTM is refused with its name in the message. */
+    before = (*g_test->row_count);
+    rc = g_test->add_track(g_test->add_track_context, g_test->invalid_path, err, 1024);
+    st_check(rc != 0 && (*g_test->row_count) == before
+                 && wcsstr(err, file_name_of(g_test->invalid_path)) != NULL,
+             "add_track names the file it refused");
+
+    if (*g_test->row_count < 1 || !g_test->library) {
+        st_check(0, "library has a track to copy for the open-failure check");
+        return;
+    }
+
+    /* Copy the first track to a temp file, add it, then delete the file so
+     * the next select must fail at open time. */
+    if (GetTempPathW(MAX_PATH, tmp) == 0
+        || GetTempFileNameW(tmp, L"blp", 0, gone) == 0
+        || !CopyFileW(g_test->library->rows[0].path, gone, FALSE)) {
+        st_check(0, "temporary copy for the open-failure check");
+        return;
+    }
+    before = (*g_test->row_count);
+    rc = g_test->add_track(g_test->add_track_context, gone, err, 1024);
+    st_check(rc == 0 && (*g_test->row_count) == before + 1,
+             "a valid copy joins the library");
+    DeleteFileW(gone);
+
+    /* Select the row whose file is gone: open fails and the status bar gets
+     * the same message the app builds for this row, in the active language. */
+    ListView_SetItemState((*g_test->controls).list, before, LVIS_SELECTED | LVIS_FOCUSED,
+                          LVIS_SELECTED | LVIS_FOCUSED);
+    pump(100);
+    SendMessageW((*g_test->controls).status, SB_GETTEXTW, 0, (LPARAM)bar);
+    {
+        /* The bar must start with the app's own message for this row, the
+         * name then the engine's reason; the reason text varies, so the check
+         * fixes the prefix up to the first ": " after the name. */
+        wchar_t prefix[1400] = L"";
+        swprintf(prefix, 1400, tr(STR_TRACK_OPEN_FAILED),
+                 g_test->library->rows[before].name, L"");
+        size_t cut = wcslen(prefix);
+        st_check((*g_test->selected) == before
+                     && cut > 0 && wcsncmp(bar, prefix, cut) == 0,
+                 "a vanished file is selected and its open error is shown");
+    }
+
+    /* Put the library back to the usual first-track state for later phases:
+     * drop the copy, then clear the selection before picking row 0 again, so
+     * the change is seen as a new selection (same as previous_wrap does). */
+    send_cmd(IDC_BTN_REMOVE);
+    pump(100);
+    ListView_SetItemState((*g_test->controls).list, -1, 0, LVIS_SELECTED);
+    pump(20);
+    ListView_SetItemState((*g_test->controls).list, 0, LVIS_SELECTED | LVIS_FOCUSED,
+                          LVIS_SELECTED | LVIS_FOCUSED);
+    pump(50);
 }
 
 /* Phase 2 - transport: play reaches PLAYING with the device open, the API
@@ -650,6 +808,183 @@ static void st_phase_clear(void)
     }
 }
 
+/* Phase 5b - progress drag: press starts a drag and seeks, a move while the
+ * button is held updates the drag position that is painted, and the release
+ * seeks to the final point and ends the drag. Needs an open track, so it runs
+ * after the removals, with the first row selected. */
+static void st_phase_progress_drag(void)
+{
+    RECT rc;
+    int x1;
+    int x2;
+    PlayerSnapshot s;
+
+    GetClientRect((*g_test->controls).progress, &rc);
+    x1 = (rc.right - rc.left) / 4;
+    x2 = (rc.right - rc.left) * 3 / 4;
+
+    SendMessageW((*g_test->controls).progress, WM_LBUTTONDOWN, 0, MAKELPARAM(x1, 8));
+    st_check(g_progress_dragging == 1 && g_progress_drag_x == x1,
+             "pressing the progress bar starts a drag at that point");
+
+    SendMessageW((*g_test->controls).progress, WM_MOUSEMOVE, 0, MAKELPARAM(x2, 8));
+    st_check(g_progress_dragging == 1 && g_progress_drag_x == x2,
+             "moving while pressed moves the drag point");
+
+    SendMessageW((*g_test->controls).progress, WM_LBUTTONUP, 0, MAKELPARAM(x2, 8));
+    s = player_get_state(g_test->player);
+    /* Released at 3/4 of the bar: the seek lands in 55..80 % of the track,
+     * the same window the seek phase asserts for that point. */
+    st_check(g_progress_dragging == 0
+                 && s.position > s.total_samples * 55 / 100
+                 && s.position < s.total_samples * 80 / 100,
+             "releasing the progress bar ends the drag and seeks to 3/4");
+
+    /* A release without a press does nothing: the drag flag stays off. */
+    SendMessageW((*g_test->controls).progress, WM_LBUTTONUP, 0, MAKELPARAM(x1, 8));
+    st_check(g_progress_dragging == 0,
+             "a release without a press leaves the drag off");
+}
+
+/* Phase 6a - banner layout: the state box is at least as wide as its widest
+ * text in both languages, and a track name too long for the banner is cut
+ * with "..." so it fits, while a short name is shown whole. */
+static void st_phase_layout(void)
+{
+    wchar_t shown[512] = L"";
+    wchar_t longName[512];
+    int widest;
+    size_t i;
+    HDC dc;
+    HGDIOBJ oldFont;
+    SIZE sz;
+
+    widest = measure_state_text_width();
+    st_check(widest > 0, "state text width is measured with the real font");
+
+    /* The width must cover the active language's stopped label, which is one
+     * of the four state texts that measure_state_text_width() takes. */
+    dc = GetDC(NULL);
+    oldFont = SelectObject(dc, (HGDIOBJ)g_font);
+    GetTextExtentPoint32W(dc, tr(STR_STATE_STOPPED),
+                          (int)wcslen(tr(STR_STATE_STOPPED)), &sz);
+    SelectObject(dc, oldFont);
+    ReleaseDC(NULL, dc);
+    st_check(widest >= sz.cx, "state width covers the stopped label in use");
+
+    /* A long name is cut and ends in "..." so it fits the banner. */
+    for (i = 0; i < 300; i++)
+        longName[i] = L'W';
+    longName[300] = L'\0';
+    set_name_fitted(longName);
+    GetWindowTextW((*g_test->controls).valName, shown, 512);
+    st_check(wcslen(shown) > 3 && wcscmp(shown + wcslen(shown) - 3, L"...") == 0
+                 && wcslen(shown) < 300,
+             "a name wider than the banner ends in ... and is shorter");
+
+    /* A short name is shown whole, with no ellipsis. */
+    set_name_fitted(L"ok");
+    GetWindowTextW((*g_test->controls).valName, shown, 512);
+    st_check(wcscmp(shown, L"ok") == 0, "a short name is shown without cutting");
+
+    /* Restore the name of the track that is open, so later checks see it. */
+    if ((*g_test->row_count) > 0 && (*g_test->selected) >= 0)
+        set_name_fitted(g_test->library->rows[*g_test->selected].name);
+}
+
+/* Phase 6b - painting without a visible window: the state label takes its
+ * colour from the engine state, the system message uses the secondary text
+ * colour, and the mode buttons paint their active one with the accent. The
+ * window is never shown here, so each handler is driven with the message the
+ * system would send and the check reads back the value it produced. */
+static void st_phase_paint(void)
+{
+    HDC dc;
+    HDC mem;
+    HBITMAP bmp;
+    HGDIOBJ oldBmp;
+    RECT box = { 0, 0, 120, 30 };
+    HBRUSH brush;
+    COLORREF got;
+    COLORREF want;
+    int dark = g_ui_theme_dark;
+
+    dc = GetDC(g_test->window);
+    mem = CreateCompatibleDC(dc);
+    bmp = CreateCompatibleBitmap(dc, 240, 60);
+    oldBmp = SelectObject(mem, bmp);
+
+    /* State label colour follows the engine state: stopped uses the loading
+     * colour in the theme in force. */
+    g_player_snapshot.state = PLAYER_STOPPED;
+    brush = (HBRUSH)SendMessageW(g_test->window, WM_CTLCOLORSTATIC,
+                                 (WPARAM)mem, (LPARAM)(*g_test->controls).valState);
+    want = dark ? UI_STATE_DARK_LOADING : UI_STATE_LIGHT_LOADING;
+    got = GetTextColor(mem);
+    st_check(brush != NULL && got == want,
+             "state label uses the loading colour while stopped");
+
+    g_player_snapshot.state = PLAYER_PLAYING;
+    brush = (HBRUSH)SendMessageW(g_test->window, WM_CTLCOLORSTATIC,
+                                 (WPARAM)mem, (LPARAM)(*g_test->controls).valState);
+    want = dark ? UI_STATE_DARK_PLAYING : UI_STATE_LIGHT_PLAYING;
+    st_check(GetTextColor(mem) == want,
+             "state label uses the playing colour while playing");
+
+    g_player_snapshot.state = PLAYER_PAUSED;
+    SendMessageW(g_test->window, WM_CTLCOLORSTATIC,
+                 (WPARAM)mem, (LPARAM)(*g_test->controls).valState);
+    want = dark ? UI_STATE_DARK_PAUSED : UI_STATE_LIGHT_PAUSED;
+    st_check(GetTextColor(mem) == want,
+             "state label uses the paused colour while paused");
+
+    g_player_snapshot.state = PLAYER_FINISHED;
+    SendMessageW(g_test->window, WM_CTLCOLORSTATIC,
+                 (WPARAM)mem, (LPARAM)(*g_test->controls).valState);
+    want = dark ? UI_STATE_DARK_FINISHED : UI_STATE_LIGHT_FINISHED;
+    st_check(GetTextColor(mem) == want,
+             "state label uses the finished colour when finished");
+    g_player_snapshot.state = PLAYER_STOPPED;
+
+    /* The system message is drawn in the secondary text colour. */
+    SendMessageW(g_test->window, WM_CTLCOLORSTATIC,
+                 (WPARAM)mem, (LPARAM)(*g_test->controls).valSystem);
+    want = dark ? UI_THEME_DARK_SECUNDARIO : UI_THEME_LIGHT_SECUNDARIO;
+    st_check(GetTextColor(mem) == want,
+             "system message uses the secondary text colour");
+
+    /* An active mode button is painted with the accent colour; the inactive
+     * one with the surface. Read back the fill at a point inside the box. */
+    {
+        DRAWITEMSTRUCT dis;
+        COLORREF px;
+        memset(&dis, 0, sizeof dis);
+        dis.CtlType = ODT_BUTTON;
+        dis.CtlID = IDC_BTN_MODE_LIBRARY;
+        dis.hwndItem = (*g_test->controls).btnModeLibrary;
+        dis.hDC = mem;
+        dis.rcItem = box;
+        g_active_mode = 0;
+        SendMessageW(g_test->window, WM_DRAWITEM, 0, (LPARAM)&dis);
+        /* Pixel at the top-left inside corner, outside the 2px border. */
+        px = GetPixel(mem, 6, 6);
+        st_check(px == (dark ? UI_THEME_DARK_ACENTO : UI_THEME_LIGHT_ACENTO),
+                 "active mode button fills with the accent colour");
+        /* Same button while Ajustes is the active mode: it is inactive now. */
+        g_active_mode = 2;
+        SendMessageW(g_test->window, WM_DRAWITEM, 0, (LPARAM)&dis);
+        px = GetPixel(mem, 6, 6);
+        st_check(px == (dark ? UI_THEME_DARK_SUPERFICIE : UI_THEME_LIGHT_SUPERFICIE),
+                 "inactive mode button fills with the surface colour");
+        g_active_mode = 0;
+    }
+
+    SelectObject(mem, oldBmp);
+    DeleteObject(bmp);
+    DeleteDC(mem);
+    ReleaseDC(g_test->window, dc);
+}
+
 /* One full transport round on the current track: three play/seek/rewind/
  * pause cycles through the single play button and the previous button, then
  * a track switch (the file and the device are closed and reopened, the
@@ -726,8 +1061,12 @@ static int run_selftest(void)
     st_log_handles("after library");
     st_phase_modes_theme();
     st_log_handles("after modes/theme");
+    st_phase_defensive();
+    st_log_handles("after defensive branches");
     st_phase_library_crud();
     st_log_handles("after library CRUD");
+    st_phase_library_errors();
+    st_log_handles("after library errors");
     st_phase_previous_wrap();
     st_phase_transport();
     st_log_handles("after transport");
@@ -738,6 +1077,7 @@ static int run_selftest(void)
     st_log_handles("after pair");
     st_phase_remove();
     st_log_handles("after remove");
+    st_phase_progress_drag();
 
     /* Leak check by repetition: two identical transport rounds, both
      * measured in the same state (stopped, other row, device open) after
@@ -760,6 +1100,8 @@ static int run_selftest(void)
              "no handle growth across play/pause cycles");
     st_check(memB <= mem1 + 8u * 1024u * 1024u,
              "memory growth under 8 MB across cycles");
+    st_phase_layout();
+    st_phase_paint();
     st_phase_clear();
     st_log_handles("after clear");
 
