@@ -58,7 +58,14 @@ jobs:
           if ($actualHash -ne $expectedHash) {
             throw "OpenCppCoverage SHA-256 mismatch: expected $expectedHash, got $actualHash"
           }
-          & $installer /VERYSILENT
+          $installProc = Start-Process -FilePath $installer -ArgumentList '/VERYSILENT' -Wait -PassThru
+          if ($installProc.ExitCode -ne 0) { throw "OpenCppCoverage installer exited $($installProc.ExitCode)" }
+          # The installer can return before the executable is in place: wait for it
+          # here, so a missing install fails this step with a clear message.
+          $oc = Join-Path $env:ProgramFiles 'OpenCppCoverage\OpenCppCoverage.exe'
+          $deadline = (Get-Date).AddSeconds(120)
+          while (-not (Test-Path $oc) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+          if (-not (Test-Path $oc)) { throw "OpenCppCoverage.exe not found at $oc after installing" }
 
       - name: Measure coverage of the window self-test
         shell: pwsh
