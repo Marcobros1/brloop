@@ -350,10 +350,6 @@ static void create_controls(HWND parent)
                                IDC_VAL_LOOPST, 0, 0, 0, 0);
     g_controls.valLoopEnd = make_ctl(parent, 0, L"STATIC", tr(STR_LOOP_UNAVAILABLE), 0,
                                 IDC_VAL_LOOPEND, 0, 0, 0, 0);
-    g_controls.capVer = make_ctl(parent, 0, L"STATIC", tr(STR_CAP_VERSION), 0,
-                            IDC_CAP_VER, 0, 0, 0, 0);
-    g_controls.btnPair = make_ctl(parent, 0, L"BUTTON", L"\u2014", BS_OWNERDRAW,
-                             IDC_BTN_PAIR, 0, 0, 0, 0);
 
     g_controls.groupPlay = make_ctl(parent, 0, L"BUTTON", tr(STR_PLAY_GROUP),
                                BS_GROUPBOX, 0, 0, 0, 0, 0);
@@ -369,13 +365,8 @@ static void create_controls(HWND parent)
                              BS_OWNERDRAW, IDC_BTN_PLAY, 0, 0, 0, 0);
     g_controls.btnNext = make_ctl(parent, 0, L"BUTTON", tr(STR_BUTTON_NEXT),
                              BS_OWNERDRAW, IDC_BTN_NEXT, 0, 0, 0, 0);
-    g_controls.btnLang = make_ctl(parent, 0, L"BUTTON", tr(STR_BUTTON_LANGUAGE),
-                             BS_OWNERDRAW, IDC_BTN_LANG, 0, 0, 0, 0);
-    g_controls.btnTheme = make_ctl(parent, 0, L"BUTTON", tr(STR_BUTTON_THEME),
-                              BS_OWNERDRAW, IDC_BTN_THEME, 0, 0, 0, 0);
-    SetWindowTheme(g_controls.btnLang, L"", L"");
-    SetWindowTheme(g_controls.btnTheme, L"", L"");
-    SetWindowTheme(g_controls.btnPair, L"", L"");
+    /* Removed: btnLang / btnTheme bottom-bar buttons. Language and theme now
+     * live in the Settings panel (Q-121, Q-122). */
 
     /* Mode bar (A2): owner-drawn buttons; the active one is painted with
      * color and border (Q-078, WCAG 1.4.1). */
@@ -383,6 +374,65 @@ static void create_controls(HWND parent)
                                   BS_OWNERDRAW, IDC_BTN_MODE_LIBRARY, 0, 0, 0, 0);
     g_controls.btnModeSettings = make_ctl(parent, 0, L"BUTTON", tr(STR_MODE_SETTINGS),
                                    BS_OWNERDRAW, IDC_BTN_MODE_SETTINGS, 0, 0, 0, 0);
+    /* Settings panel controls (Q-121, Q-122): language, theme, palette.
+     * Created here, positioned by layout(); shown only in Settings mode.
+     */
+    g_controls.capLang = make_ctl(parent, 0, L"STATIC", tr(STR_SETTINGS_LANGUAGE),
+                               0, 0, 0, 0, 0, 0);
+    g_controls.capTheme = make_ctl(parent, 0, L"STATIC", tr(STR_SETTINGS_THEME),
+                                0, 0, 0, 0, 0, 0);
+    g_controls.capPalette = make_ctl(parent, 0, L"STATIC", tr(STR_SETTINGS_PALETTE),
+                                  0, 0, 0, 0, 0, 0);
+    g_controls.btnLangEn = make_ctl(parent, 0, L"BUTTON", tr(STR_MENU_ENGLISH),
+                                 BS_OWNERDRAW, IDC_BTN_LANG_EN, 0, 0, 0, 0);
+    g_controls.btnLangEs = make_ctl(parent, 0, L"BUTTON", tr(STR_MENU_SPANISH),
+                                 BS_OWNERDRAW, IDC_BTN_LANG_ES, 0, 0, 0, 0);
+    g_controls.btnThemeSystem = make_ctl(parent, 0, L"BUTTON", tr(STR_MENU_THEME_SYSTEM),
+                                      BS_OWNERDRAW, IDC_BTN_THEME_SYSTEM, 0, 0, 0, 0);
+    g_controls.btnThemeLight = make_ctl(parent, 0, L"BUTTON", tr(STR_MENU_THEME_LIGHT),
+                                     BS_OWNERDRAW, IDC_BTN_THEME_LIGHT, 0, 0, 0, 0);
+    g_controls.btnThemeDark = make_ctl(parent, 0, L"BUTTON", tr(STR_MENU_THEME_DARK),
+                                    BS_OWNERDRAW, IDC_BTN_THEME_DARK, 0, 0, 0, 0);
+    g_controls.lstPalette = make_ctl(parent, 0, L"LISTBOX", L"",
+                                  LBS_NOTIFY | WS_VSCROLL | WS_BORDER,
+                                  IDC_LST_PALETTE, 0, 0, 0, 0);
+    /* Settings palette list: catalogue names (Q-112, Q-116). Wii Blanco is
+     * the initial choice; the rest follow A-Z. Applied in task (b). */
+    {
+        static const wchar_t *const names[] = {
+            L"Wii Blanco",
+            L"Animal Crossing (verdes)",
+            L"GameCube Indigo",
+            L"GameCube Jet Black",
+            L"GameCube Spice",
+            L"Mario Kart Double Dash",
+            L"Mario Kart Wii (aro azul)",
+            L"Metroid Prime (visor)",
+            L"Metroid Prime 2 (Dark Visor)",
+            L"Metroid Prime 3 (Phazon)",
+            L"New Super Mario Bros. Wii (cielo)",
+            L"Resident Evil 4 (apagado)",
+            L"Smash Brawl (modos)",
+            L"Super Mario Galaxy (oscura)",
+            L"Super Mario Galaxy 2 (clara)",
+            L"Super Mario Sunshine (mar)",
+            L"Super Smash Bros. Melee",
+            L"Wii Azul",
+            L"Wii Fit (verde salud)",
+            L"Wii Sports (azul y gris)",
+            L"Wii Sports Resort (resort)",
+            L"Zelda Skyward Sword (acuarela)",
+            L"Zelda Twilight Princess (apagado)",
+            L"Zelda Wind Waker (mar)"
+        };
+        size_t k;
+        for (k = 0; k < sizeof names / sizeof names[0]; k++)
+            SendMessageW(g_controls.lstPalette, LB_ADDSTRING, 0,
+                         (LPARAM)names[k]);
+        /* Wii Blanco is the initial selection (Q-112). */
+        SendMessageW(g_controls.lstPalette, LB_SETCURSEL, 0, 0);
+    }
+
 
     g_controls.progress = make_ctl(parent, 0, PROGRESS_CLASS_NAME, L"",
                               0, IDC_PROGRESS, 0, 0, 0, 0);
@@ -423,7 +473,6 @@ static void create_controls(HWND parent)
     EnableWindow(g_controls.btnRemove, FALSE);
     EnableWindow(g_controls.btnClear, FALSE);
     EnableWindow(g_controls.checkLoop, FALSE);
-    EnableWindow(g_controls.btnPair, FALSE);
 }
 
 /* ----------------------------------------------------------------- UI --- */
@@ -438,25 +487,21 @@ static void on_command(int id)
     case IDC_BTN_OPEN:
         browse_files();
         break;
-    case IDC_BTN_LANG:
-        show_language_menu(g_hwnd);
-        break;
-    case IDM_LANG_EN:
+    /* Language and theme now live in the Settings panel (Q-121, Q-122),
+     * raised as button commands instead of bottom-bar buttons / menus. */
+    case IDC_BTN_LANG_EN:
         set_language(STR_LANG_EN);
         break;
-    case IDM_LANG_ES:
+    case IDC_BTN_LANG_ES:
         set_language(STR_LANG_ES);
         break;
-    case IDC_BTN_THEME:
-        show_theme_menu(g_hwnd);
-        break;
-    case IDM_THEME_SYSTEM:
+    case IDC_BTN_THEME_SYSTEM:
         set_theme(THEME_SYSTEM);
         break;
-    case IDM_THEME_LIGHT:
+    case IDC_BTN_THEME_LIGHT:
         set_theme(THEME_LIGHT);
         break;
-    case IDM_THEME_DARK:
+    case IDC_BTN_THEME_DARK:
         set_theme(THEME_DARK);
         break;
     case IDC_BTN_MODE_LIBRARY:
@@ -539,21 +584,6 @@ static void on_command(int id)
                     ? PLAYER_SPEED_SCALE
                     : PLAYER_FLSM_SPEED_PPM);
         break;
-    case IDC_BTN_PAIR: {
-        PlayerSnapshot s = player_get_state(g_player);
-        wchar_t msg[80];
-        int next;
-        /* The UI never offers the engine's internal mix-all value (-1). */
-        next = transport_next_pair(s.pair_sel, s.pair_count);
-        if (next < 0)
-            break;
-        if (player_set_channel_pair(g_player, next) != 0)
-            break;
-        swprintf(msg, 80, tr(STR_VERSION_SELECTED),
-                 next + 1, next * 2 + 1, next * 2 + 2);
-        set_status(msg);
-        break;
-    }
     default:
         break;
     }
@@ -596,15 +626,12 @@ static void relabel_controls(void)
     SetWindowTextW(g_controls.capLoopSt, tr(STR_CAP_LOOP_START));
     SetWindowTextW(g_controls.capLoopEnd, tr(STR_CAP_LOOP_END));
     SetWindowTextW(g_controls.capPath, tr(STR_CAP_PATH));
-    SetWindowTextW(g_controls.capVer, tr(STR_CAP_VERSION));
     list_refresh_loop_column();
     SetWindowTextW(g_controls.valLoopSt, tr(STR_LOOP_UNAVAILABLE));
     SetWindowTextW(g_controls.valLoopEnd, tr(STR_LOOP_UNAVAILABLE));
     SetWindowTextW(g_controls.groupPlay, tr(STR_PLAY_GROUP));
     SetWindowTextW(g_controls.btnPrevious, tr(STR_BUTTON_PREVIOUS));
     SetWindowTextW(g_controls.btnNext, tr(STR_BUTTON_NEXT));
-    SetWindowTextW(g_controls.btnLang, tr(STR_BUTTON_LANGUAGE));
-    SetWindowTextW(g_controls.btnTheme, tr(STR_BUTTON_THEME));
     SetWindowTextW(g_controls.checkLoop, tr(STR_CHECK_LOOP));
     SetWindowTextW(g_controls.groupSpeed, tr(STR_SPEED_GROUP));
     {
@@ -626,7 +653,6 @@ static void relabel_controls(void)
      * value written, which is now in the old language). */
     SetWindowTextW(g_controls.valState, L"");
     SetWindowTextW(g_controls.btnPlay, L"");
-    SetWindowTextW(g_controls.btnPair, L"");
     SetWindowTextW(g_controls.btnSpeed, L"");
     SetWindowTextW(g_controls.valDevRate, L"");
     InvalidateRect(g_hwnd, NULL, TRUE);
@@ -747,8 +773,6 @@ void set_active_mode(int mode)
     ctl_show(g_controls.valSpeed, bib);
     ctl_show(g_controls.valDevRate, bib);
     ctl_show(g_controls.btnSpeed, bib);
-    ctl_show(g_controls.btnPair, bib);
-    ctl_show(g_controls.capVer, bib);
 
     /* Fields the banner card (B1) does not show. */
     ctl_show(g_controls.capSamples, 0);
@@ -757,6 +781,18 @@ void set_active_mode(int mode)
     ctl_show(g_controls.valLoopSt, 0);
     ctl_show(g_controls.capLoopEnd, 0);
     ctl_show(g_controls.valLoopEnd, 0);
+
+    /* Settings panel controls: shown only in Settings mode (mode 2). */
+    int settings = (mode == 2);
+    ctl_show(g_controls.capLang, settings);
+    ctl_show(g_controls.capTheme, settings);
+    ctl_show(g_controls.capPalette, settings);
+    ctl_show(g_controls.btnLangEn, settings);
+    ctl_show(g_controls.btnLangEs, settings);
+    ctl_show(g_controls.btnThemeSystem, settings);
+    ctl_show(g_controls.btnThemeLight, settings);
+    ctl_show(g_controls.btnThemeDark, settings);
+    ctl_show(g_controls.lstPalette, settings);
 
     layout();
     RedrawWindow(g_hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ALLCHILDREN);
@@ -851,8 +887,11 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         HBRUSH face;
         if (dis->CtlType != ODT_BUTTON)
             return FALSE;
-        /* Text buttons: language, theme and version pickers. */
-        if (dis->CtlID == IDC_BTN_LANG || dis->CtlID == IDC_BTN_THEME || dis->CtlID == IDC_BTN_PAIR) {
+        /* Text buttons: language, theme and version pickers (Settings panel,
+         * Q-121, Q-122). */
+        if (dis->CtlID == IDC_BTN_LANG_EN || dis->CtlID == IDC_BTN_LANG_ES
+            || dis->CtlID == IDC_BTN_THEME_SYSTEM || dis->CtlID == IDC_BTN_THEME_LIGHT
+            || dis->CtlID == IDC_BTN_THEME_DARK) {
             wchar_t text[64];
             COLORREF text_fg = (dis->itemState & ODS_DISABLED)
                 ? GetSysColor(COLOR_GRAYTEXT) : UI_C_PRIMARIO;
@@ -967,9 +1006,11 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (ctl == g_controls.btnOpen || ctl == g_controls.btnRemove
             || ctl == g_controls.btnClear || ctl == g_controls.btnPrevious
             || ctl == g_controls.btnPlay || ctl == g_controls.btnNext
-            || ctl == g_controls.btnLang || ctl == g_controls.btnTheme
-            || ctl == g_controls.btnSpeed || ctl == g_controls.btnPair
-            || ctl == g_controls.btnModeLibrary || ctl == g_controls.btnModeSettings) {
+            || ctl == g_controls.btnLangEn || ctl == g_controls.btnLangEs
+            || ctl == g_controls.btnThemeSystem || ctl == g_controls.btnThemeLight
+            || ctl == g_controls.btnThemeDark || ctl == g_controls.btnSpeed
+            || ctl == g_controls.btnModeLibrary
+            || ctl == g_controls.btnModeSettings) {
             brush = g_brushFace;
             SetBkColor(hdc, UI_C_SUPERFICIE);
         }

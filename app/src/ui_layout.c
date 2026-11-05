@@ -185,11 +185,35 @@ void layout(void)
         move_ctl(g_controls.valSpeed, rightX + 12, sy + 28, 84, 20);
         move_ctl(g_controls.valDevRate, rightX + rightW - 12 - 170, sy + 28, 170, 20);
         move_ctl(g_controls.btnSpeed, rightX + (rightW - 200) / 2, sy + 60, 200, 26);
-        move_ctl(g_controls.btnPair, rightX + (rightW - 200) / 2, sy + 60 + 26 + 8, 200, 26);
-        move_ctl(g_controls.capVer, rightX + 12, sy + 60 + 26 + 8 + 26 + 8, rightW - 24, 18);
     }
-    /* Settings (mode 2): language and theme stay visible in the bottom bar;
-     * there is no extra central content. */
+    /* Settings (mode 2): language, theme and palette in the central block
+     * (Q-121, Q-122). Three fieldsets stacked vertically; controls are
+     * created in create_controls() and only positioned here. */
+    {
+        int sx = rightX + 12;
+        int sw = rightW - 24;
+        int fy = contentY;
+        int fh = 44;
+        int gap = 14;
+
+        /* Idioma / Language. */
+        move_ctl(g_controls.capLang, sx, fy, 120, 18);
+        move_ctl(g_controls.btnLangEn, sx, fy + 20, 110, 26);
+        move_ctl(g_controls.btnLangEs, sx + 118, fy + 20, 110, 26);
+
+        /* Tema / Theme. */
+        int ty = fy + fh + gap;
+        move_ctl(g_controls.capTheme, sx, ty, 120, 18);
+        move_ctl(g_controls.btnThemeSystem, sx, ty + 20, 100, 26);
+        move_ctl(g_controls.btnThemeLight, sx + 108, ty + 20, 100, 26);
+        move_ctl(g_controls.btnThemeDark, sx + 216, ty + 20, 100, 26);
+
+        /* Paleta / Palette: list of catalogue entries (list only, applied in
+         * task (b)). */
+        int py = ty + fh + gap;
+        move_ctl(g_controls.capPalette, sx, py, 120, 18);
+        move_ctl(g_controls.lstPalette, sx, py + 20, sw, topH - (py - contentY) - 30);
+    }
 
     /* Bottom bar, always visible: transport controls, progress, state,
      * and system message to its right. */
@@ -201,19 +225,15 @@ void layout(void)
     move_ctl(g_controls.btnPrevious, x0, y + 22, 84, 28);
     move_ctl(g_controls.btnPlay, x0 + 96, y + 22, 104, 28);
     move_ctl(g_controls.btnNext, x0 + 212, y + 22, 96, 28);
-    /* Language/theme column to the right; everything else in the bottom bar
-     * ends before its left edge (no overlap). */
-    move_ctl(g_controls.btnLang, cw - m - 12 - 150, y + 62, 150, 26);
-    move_ctl(g_controls.btnTheme, cw - m - 12 - 150, y + 98, 150, 26);
+    /* Progress: its own row, up to the state/system-message area. */
     {
         int leftX = m + 12;
-        int rightEdge = cw - m - 12 - 150 - 12;
+        int rightEdge = cw - m - 12;
         int stateW = measure_state_text_width() + 16;
         int sysX = leftX + 180 + stateW + 12;
         int sysW = rightEdge - sysX;
         if (sysW < 0)
             sysW = 0;
-        /* Progress: its own row, up to the language/theme column. */
         move_ctl(g_controls.progress, leftX, y + 56, rightEdge - leftX, 16);
         /* Time below the progress bar (as before the change). */
         move_ctl(g_controls.valTime, leftX, y + 78, 170, 18);

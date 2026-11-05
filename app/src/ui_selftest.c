@@ -180,6 +180,28 @@ static void st_phase_modes_theme(void)
     st_check((GetWindowLongPtrW((*g_test->controls).list, GWL_STYLE) & WS_VISIBLE) == 0,
              "lista oculta en modo Ajustes");
 
+    /* Tema y idioma desde los botones del panel de Ajustes (Q-121, Q-122).
+     * Los controles de Ajustes solo son visibles en este modo. */
+    send_cmd(IDC_BTN_THEME_LIGHT);
+    pump(50);
+    st_check(g_theme_choice == THEME_LIGHT, "tema claro seleccionado");
+
+    send_cmd(IDC_BTN_THEME_DARK);
+    pump(50);
+    st_check(g_theme_choice == THEME_DARK, "tema oscuro seleccionado");
+
+    send_cmd(IDC_BTN_THEME_SYSTEM);
+    pump(50);
+    st_check(g_theme_choice == THEME_SYSTEM, "tema vuelve al sistema");
+
+    send_cmd(IDC_BTN_LANG_EN);
+    pump(50);
+    st_check(strings_language() == STR_LANG_EN, "idioma English seleccionado");
+
+    send_cmd(IDC_BTN_LANG_ES);
+    pump(50);
+    st_check(strings_language() == STR_LANG_ES, "idioma Espanol seleccionado");
+
     /* Vuelve a Biblioteca: el bloque central reaparece. */
     send_cmd(IDC_BTN_MODE_LIBRARY);
     pump(50);
@@ -188,19 +210,6 @@ static void st_phase_modes_theme(void)
              "grupo Biblioteca visible en modo Biblioteca");
     st_check((GetWindowLongPtrW((*g_test->controls).list, GWL_STYLE) & WS_VISIBLE) != 0,
              "lista visible en modo Biblioteca");
-
-    /* Tema: Claro -> Oscuro -> Sistema (vuelve al valor por defecto). */
-    send_cmd(IDM_THEME_LIGHT);
-    pump(50);
-    st_check(g_theme_choice == THEME_LIGHT, "tema claro seleccionado");
-
-    send_cmd(IDM_THEME_DARK);
-    pump(50);
-    st_check(g_theme_choice == THEME_DARK, "tema oscuro seleccionado");
-
-    send_cmd(IDM_THEME_SYSTEM);
-    pump(50);
-    st_check(g_theme_choice == THEME_SYSTEM, "tema vuelve al sistema");
 }
 
 /* Defensive branches: out-of-range indexes must not move state, and the
@@ -609,11 +618,8 @@ static void st_phase_seek_speed(void)
     }
 }
 
-/* Phase 4 - track switch and version (channel-pair) selection: switching
- * while playing stops cleanly; the 4-channel second track exposes 2 pairs;
- * the button cycles 1 -> 2 -> mix, its caption matches, and switching
- * versions live (device reopen path) keeps playback running without audio
- * errors. */
+/* Phase 4 - track switch while playing: switching tracks stops playback,
+ * Siguiente/Anterior wrap around and keep playing, and pause freezes it. */
 static void st_phase_pair(void)
 {
     /* Track switch while playing: playback must stop cleanly. */
@@ -624,88 +630,42 @@ static void st_phase_pair(void)
     st_check((*g_test->selected) == 1, "second track selected");
     st_log_handles("row 2 opened (stopped)");
 
-    /* Version (channel pair) selection on the 4-channel second track. */
+    /* Start playing the second track so Siguiente/Anterior can be tested
+     * while playing. */
+    send_cmd(IDC_BTN_PLAY);
+    st_check(wait_state(PLAYER_PLAYING, 4000), "second track plays");
+
+    /* Siguiente: from the last row it wraps to the first one and keeps
+     * playing, because the user was listening. */
     {
-        PlayerSnapshot s = player_get_state(g_test->player);
-        st_check(s.channels == 4 && s.pair_count == 2 && s.pair_sel == 0,
-                 "4-channel file exposes 2 versions and starts on version 1");
-        send_cmd(IDC_BTN_PAIR);
-        pump(50);
-        s = player_get_state(g_test->player);
-        st_check(s.pair_sel == 1, "version button selects pair 2");
-        send_cmd(IDC_BTN_PAIR);
-        pump(50);
-        s = player_get_state(g_test->player);
-        st_check(s.pair_sel == 0, "second press returns to version 1");
-        {
-            TransportLogicalState ls = transport_logical_state(s.state,
-                s.speed_ppm == PLAYER_FLSM_SPEED_PPM, s.pair_sel, s.pair_count);
-            st_check(ls.pair_index == 0,
-                     "version state reports the first version");
-        }
-        send_cmd(IDC_BTN_PAIR);
-        pump(50);
-        s = player_get_state(g_test->player);
-        st_check(s.pair_sel == 1, "third press selects version 2 again");
-        st_log_handles("pair cycle while stopped");
-
-        /* Live switch: a version is chosen while audio is playing. */
-        send_cmd(IDC_BTN_PAIR);
-        pump(50); /* pair 1 selected */
-        send_cmd(IDC_BTN_PLAY);
-        st_check(wait_state(PLAYER_PLAYING, 4000),
-                 "play with a version selected");
-        send_cmd(IDC_BTN_PAIR);
-        pump(150); /* pair 2 selected */
-        s = player_get_state(g_test->player);
-        {
-            uint64_t position_after_switch = s.position;
-            st_check(s.state == PLAYER_PLAYING && s.pair_sel == 1,
-                     "version switches live while playing");
-            st_check(position_after_switch > 0,
-                     "version switch keeps the audible position");
-        }
-        send_cmd(IDC_BTN_PAIR);
-        pump(150); /* version 1 selected again */
-        s = player_get_state(g_test->player);
-        st_check(s.state == PLAYER_PLAYING && s.pair_sel == 0
-                 && s.audio_error == 0,
-                 "version 1 restored live without audio errors");
-        st_log_handles("after live pair switches");
-
-        /* Siguiente: from the last row it wraps to the first one and keeps
-         * playing, because the user was listening. */
-        {
-            /* Guarded: a bare --selftest without files leaves the library
-             * empty and the checks below must fail, not crash. */
-            int expect = transport_next_index(*g_test->selected, *g_test->row_count);
-            send_cmd(IDC_BTN_NEXT);
-            st_check(wait_state(PLAYER_PLAYING, 4000)
-                     && (*g_test->selected) == expect,
-                     "next button advances the track and keeps playing");
-            st_log_handles("after next (playing)");
-        }
-
-        /* Anterior with the song just opened (position ~0) goes back to the
-         * previous track - wrapping to the last row - and keeps playing. */
-        {
-            int expect = transport_previous_index(*g_test->selected, *g_test->row_count);
-            send_cmd(IDC_BTN_PREVIOUS);
-            st_check(wait_state(PLAYER_PLAYING, 4000)
-                     && (*g_test->selected) == expect,
-                     "previous button goes back and keeps playing");
-            st_log_handles("after previous (playing)");
-        }
-
-        /* No stop button: pause instead, so the leak cycles start from a
-         * known state. */
-        send_cmd(IDC_BTN_PLAY);
-        st_check(wait_state(PLAYER_PAUSED, 2000),
-                 "pause after the version checks");
-        st_log_handles("after pause (row reopened)");
+        /* Guarded: a bare --selftest without files leaves the library
+         * empty and the checks below must fail, not crash. */
+        int expect = transport_next_index(*g_test->selected, *g_test->row_count);
+        send_cmd(IDC_BTN_NEXT);
+        st_check(wait_state(PLAYER_PLAYING, 4000)
+                 && (*g_test->selected) == expect,
+                 "next button advances the track and keeps playing");
+        st_log_handles("after next (playing)");
     }
-}
 
+    /* Anterior with the song just opened (position ~0) goes back to the
+     * previous track - wrapping to the last row - and keeps playing. */
+    {
+        int expect = transport_previous_index(*g_test->selected, *g_test->row_count);
+        send_cmd(IDC_BTN_PREVIOUS);
+        st_check(wait_state(PLAYER_PLAYING, 4000)
+                 && (*g_test->selected) == expect,
+                 "previous button goes back and keeps playing");
+        st_log_handles("after previous (playing)");
+    }
+
+    /* No stop button: pause instead, so the leak cycles start from a
+     * known state. */
+    send_cmd(IDC_BTN_PLAY);
+    st_check(wait_state(PLAYER_PAUSED, 2000),
+             "pause after the version checks");
+    st_log_handles("after pause (row reopened)");
+}
 /* Phase 4b - language: choosing English from the menu relabels the window
  * and the state text follows, then Español restores the original labels.
  * The labels are read back from the controls themselves, so a missed control
@@ -716,7 +676,10 @@ static void st_phase_language(void)
     StrLanguage before = strings_language();
 
 
-    send_cmd(IDM_LANG_EN);
+    send_cmd(IDC_BTN_MODE_SETTINGS);
+    pump(50);
+
+    send_cmd(IDC_BTN_LANG_EN);
     pump(100);
     {
         PlayerSnapshot s = player_get_state(g_test->player);
@@ -726,20 +689,20 @@ static void st_phase_language(void)
                                 : L"Play";
         GetWindowTextW((*g_test->controls).btnPlay, cap, 64);
         st_check(wcscmp(cap, expected) == 0,
-                 "menu English relabels the play button for the current state");
+                 "English relabels the play button for the current state");
     }
     GetWindowTextW((*g_test->controls).btnPrevious, cap, 64);
-    st_check(wcscmp(cap, L"Previous") == 0, "menu English relabels Previous");
+    st_check(wcscmp(cap, L"Previous") == 0, "English relabels Previous");
     GetWindowTextW((*g_test->controls).groupLib, cap, 64);
-    st_check(wcscmp(cap, L"Library") == 0, "menu English relabels the library group");
+    st_check(wcscmp(cap, L"Library") == 0, "English relabels the library group");
     st_check(strings_language() == STR_LANG_EN, "English is the active language");
 
-    send_cmd(IDM_LANG_ES);
+    send_cmd(IDC_BTN_LANG_ES);
     pump(100);
     GetWindowTextW((*g_test->controls).btnPrevious, cap, 64);
-    st_check(wcscmp(cap, L"Anterior") == 0, "menu Español restores Previous");
+    st_check(wcscmp(cap, L"Anterior") == 0, "Español relabels Previous");
     GetWindowTextW((*g_test->controls).groupLib, cap, 64);
-    st_check(wcscmp(cap, L"Biblioteca") == 0, "menu Español restores the library group");
+    st_check(wcscmp(cap, L"Biblioteca") == 0, "Español relabels the library group");
     st_check(strings_language() == STR_LANG_ES, "Español is the active language");
     /* The loop column must follow the language too, not keep the old word. */
     if (*g_test->row_count >= 1 && g_test->library) {
@@ -747,18 +710,23 @@ static void st_phase_language(void)
         ListView_GetItemText((*g_test->controls).list, 0, 4, cell, 32);
         st_check(wcscmp(cell, g_test->library->rows[0].loop ? L"Sí" : L"No") == 0,
                  "loop column shows Sí after switching to Español");
-        send_cmd(IDM_LANG_EN);
+        send_cmd(IDC_BTN_LANG_EN);
         pump(50);
         ListView_GetItemText((*g_test->controls).list, 0, 4, cell, 32);
         st_check(wcscmp(cell, g_test->library->rows[0].loop ? L"Yes" : L"No") == 0,
                  "loop column shows Yes after switching back to English");
-        send_cmd(IDM_LANG_ES);
+        send_cmd(IDC_BTN_LANG_ES);
         pump(50);
     }
 
-    /* Leave the session in the language it started in. */
+    /* Leave the session in the language it started in, then return to
+     * Biblioteca mode so the language buttons are hidden again. */
     if (before == STR_LANG_EN)
-        send_cmd(IDM_LANG_EN);
+        send_cmd(IDC_BTN_LANG_EN);
+    else
+        send_cmd(IDC_BTN_LANG_ES);
+    pump(50);
+    send_cmd(IDC_BTN_MODE_LIBRARY);
     pump(50);
 }
 

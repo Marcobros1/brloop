@@ -14,10 +14,10 @@
 #define IDC_BTN_PLAY      1005
 #define IDC_BTN_PREVIOUS  1006
 #define IDC_BTN_NEXT      1007
-#define IDC_BTN_LANG      1009
+/* Removed: IDC_BTN_LANG / IDC_BTN_THEME. Language and theme now live in the
+ * Settings panel (Q-121, Q-122). */
 #define IDC_CHECK_LOOP    1008
 #define IDC_BTN_SPEED     1010
-#define IDC_BTN_PAIR      1012
 #define IDC_PROGRESS      1014
 #define IDC_VAL_STATE     1015
 #define IDC_VAL_TIME      1016
@@ -42,16 +42,22 @@
 #define IDC_CAP_LOOPST    1036
 #define IDC_CAP_PATH      1037
 #define IDC_CAP_VER       1038
-#define IDM_LANG_EN       1050
-#define IDM_LANG_ES       1051
-#define IDC_BTN_THEME     1011
-#define IDM_THEME_SYSTEM  1060
-#define IDM_THEME_LIGHT   1061
-#define IDM_THEME_DARK    1062
+/* Removed: IDC_BTN_LANG / IDC_BTN_THEME and the IDM_LANG_* / IDM_THEME_*
+ * menu commands. Language and theme now live in the Settings panel, raised
+ * as button commands instead of a bottom-bar menu (Q-121, Q-122). */
 
 /* Mode bar (A2): Library / Settings. */
 #define IDC_BTN_MODE_LIBRARY  1101
 #define IDC_BTN_MODE_SETTINGS 1103
+
+/* Settings panel controls (Q-121, Q-122): language, theme and palette live
+ * here, raised as button commands instead of bottom-bar buttons. */
+#define IDC_BTN_LANG_EN       1110
+#define IDC_BTN_LANG_ES       1111
+#define IDC_BTN_THEME_SYSTEM  1112
+#define IDC_BTN_THEME_LIGHT   1113
+#define IDC_BTN_THEME_DARK    1114
+#define IDC_LST_PALETTE       1115
 
 /* Short system message (B2), to the right of the big state text. */
 #define IDC_VAL_SYSTEM        1104
@@ -88,13 +94,19 @@ typedef struct {
     HWND list, status;
     HWND groupLib, groupInfo, groupPlay, groupSpeed;
     HWND btnOpen, btnRemove, btnClear;
-    HWND btnPlay, btnPrevious, btnNext, btnLang, btnTheme;
-    HWND btnSpeed, btnPair;
+    HWND btnPlay, btnPrevious, btnNext;
+    HWND btnSpeed;
     HWND btnModeLibrary, btnModeSettings;
+    /* Settings panel controls (Q-121, Q-122). */
+    HWND btnLangEn, btnLangEs;
+    HWND btnThemeSystem, btnThemeLight, btnThemeDark;
+    HWND lstPalette;
+    /* Fieldset titles for the Settings panel. */
+    HWND capLang, capTheme, capPalette;
     HWND checkLoop, progress;
     HWND capName, capCh, capRate, capDur, capSamples, capLoop, capLoopSt;
     HWND capLoopEnd;
-    HWND capPath, capVer;
+    HWND capPath;
     HWND valName, valPath, valRate, valCh, valSamples, valDur;
     HWND valLoop, valLoopSt, valState, valSystem, valTime, valSpeed, valDevRate;
     HWND valLoopEnd;
