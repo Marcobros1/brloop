@@ -37,10 +37,12 @@ typedef enum {
     X(STR_CAP_LOOP_START,       L"Inicio de loop:",            L"Loop start:") \
     X(STR_CAP_LOOP_END,         L"Fin de loop:",               L"Loop end:") \
     X(STR_CAP_PATH,             L"Ruta:",                      L"Path:") \
-    X(STR_CAP_VERSION,          L"Versión:",                   L"Version:") \
     X(STR_PLAY_GROUP,           L"Reproducción",               L"Playback") \
     X(STR_MODE_LIBRARY,         L"Biblioteca",                 L"Library") \
     X(STR_MODE_SETTINGS,        L"Ajustes",                    L"Settings") \
+    X(STR_SETTINGS_LANGUAGE,    L"Idioma",                     L"Language") \
+    X(STR_SETTINGS_THEME,       L"Tema",                       L"Theme") \
+    X(STR_SETTINGS_PALETTE,     L"Paleta",                     L"Palette") \
     X(STR_BUTTON_PLAY,          L"Reproducir",                 L"Play") \
     X(STR_BUTTON_PAUSE,         L"Pausar",                     L"Pause") \
     X(STR_BUTTON_RESUME,        L"Reanudar",                   L"Resume") \
@@ -61,10 +63,6 @@ typedef enum {
     X(STR_LOOP_YES,             L"Sí",                         L"Yes") \
     X(STR_LOOP_NO,              L"No",                         L"No") \
     X(STR_LOOP_UNAVAILABLE,     L"No disponible",              L"Not available") \
-    X(STR_VALUE_NONE,           L"—",                          L"—") \
-    X(STR_VERSION_STEREO,       L"Estéreo",                    L"Stereo") \
-    X(STR_VERSION_CAPTION,      L"Versión %d · canales %d-%d", L"Version %d · channels %d-%d") \
-    X(STR_NO_TRACK_VALUE,       L"—",                          L"—") \
     X(STR_TRACK_OPENED,         L"Archivo abierto: %s",        L"File opened: %s") \
     X(STR_TRACK_OPEN_FAILED,    L"No se pudo abrir «%s»: %s",  L"Could not open «%s»: %s") \
     X(STR_PATH_NOT_ANSI,        L"La ruta no es representable en la codificación ANSI del sistema.", L"The path cannot be represented in the system ANSI code page.") \
