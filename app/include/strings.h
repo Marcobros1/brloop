@@ -40,7 +40,6 @@ typedef enum {
     X(STR_CAP_VERSION,          L"Versión:",                   L"Version:") \
     X(STR_PLAY_GROUP,           L"Reproducción",               L"Playback") \
     X(STR_MODE_LIBRARY,         L"Biblioteca",                 L"Library") \
-    X(STR_MODE_VERSIONS,        L"Versiones",                  L"Versions") \
     X(STR_MODE_SETTINGS,        L"Ajustes",                    L"Settings") \
     X(STR_BUTTON_PLAY,          L"Reproducir",                 L"Play") \
     X(STR_BUTTON_PAUSE,         L"Pausar",                     L"Pause") \
