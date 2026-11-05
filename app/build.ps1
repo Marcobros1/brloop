@@ -120,7 +120,8 @@ try {
 
     # Headless UI-logic tests: no window, no audio. Built from the same
     # common sources as player_tests.exe (window UI code is excluded).
-    Invoke-Native $cl (@($playerFlags) + $srcCommon + @((Join-Path $root 'tests\ui_logic_tests.c'), '/Fe:ui_logic_tests.exe') + $testLink)
+    # /Zi: PDB so CI can measure this test binary with OpenCppCoverage.
+    Invoke-Native $cl (@($playerFlags) + $srcCommon + @((Join-Path $root 'tests\ui_logic_tests.c'), '/Fe:ui_logic_tests.exe', '/Zi') + $testLink)
 }
 finally {
     Pop-Location
