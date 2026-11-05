@@ -204,11 +204,14 @@ jobs:
           # measured program's exit code, so read it without Stop masking it.
           function Invoke-CoreTool {
               param($Exe, [string[]]$ToolArgs, $Xml, $Expected)
-              $ErrorActionPreference = 'Continue'
-              $output = & $oc --modules "$root\core\build*" --sources "$root\core\src*" --export_type "cobertura:$Xml" -- $Exe @ToolArgs 2>&1
-              $code = $LASTEXITCODE
-              $output
-              $ErrorActionPreference = 'Stop'
+              # Start-Process does not inherit this step's $ErrorActionPreference,
+              # so the measured program's exit code is only compared, never thrown.
+              $proc = Start-Process -FilePath $oc -NoNewWindow -Wait -PassThru -ArgumentList (@(
+                  '--modules', "$root\core\build*",
+                  '--sources', "$root\core\src*",
+                  '--export_type', "cobertura:$Xml",
+                  '--', $Exe) + $ToolArgs)
+              $code = $proc.ExitCode
               if ($code -ne $Expected) { throw "$Exe $($ToolArgs -join ' ') exited $code, expected $Expected" }
               if (-not (Test-Path $Xml)) { throw "coverage report $Xml was not written" }
           }
