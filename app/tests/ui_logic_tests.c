@@ -5,9 +5,13 @@
      2. library_add / library_contains_path / library_remove / library_clear
         (library.c).
      3. tr() / strings_set_language / strings_language (strings.c).
+     4. settings_load_palette / settings_save_palette (settings.c), in a
+        sandbox folder set through MKW_SETTINGS_DIR.
 
    Runs headless: no HWND, no waveOut, no BRSTM files needed.
  */
+#include <windows.h>
+
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -19,6 +23,7 @@
 #include "palette.h"
 #include "palette_tables.h"
 #include "player.h"
+#include "settings.h"
 #include "strings.h"
 
 static int g_pass, g_fail;
@@ -421,6 +426,148 @@ static void test_catalog_contrast(void)
           (unsigned long)unexpected);
 }
 
+/* ------------------------------------------------------------- settings --- */
+
+/* Settings tests use a folder next to the test exe, never %APPDATA%. */
+static wchar_t g_settings_dir[MAX_PATH];
+static wchar_t g_settings_file[MAX_PATH];
+
+static int settings_sandbox_setup(void)
+{
+    wchar_t exe[MAX_PATH];
+    wchar_t *slash;
+    DWORD n = GetModuleFileNameW(NULL, exe, MAX_PATH);
+
+    if (n == 0 || n >= MAX_PATH)
+        return 0;
+    slash = wcsrchr(exe, L'\\');
+    if (!slash)
+        return 0;
+    *(slash + 1) = L'\0';
+    if (wcscpy_s(g_settings_dir, MAX_PATH, exe) != 0 ||
+        wcscat_s(g_settings_dir, MAX_PATH, L"settings-sandbox") != 0)
+        return 0;
+    if (wcscpy_s(g_settings_file, MAX_PATH, g_settings_dir) != 0 ||
+        wcscat_s(g_settings_file, MAX_PATH, L"\\settings.json") != 0)
+        return 0;
+    if (!SetEnvironmentVariableW(L"MKW_SETTINGS_DIR", g_settings_dir))
+        return 0;
+    CreateDirectoryW(g_settings_dir, NULL);
+    DeleteFileW(g_settings_file);
+    return 1;
+}
+
+static void settings_sandbox_teardown(void)
+{
+    DeleteFileW(g_settings_file);
+    RemoveDirectoryW(g_settings_dir);
+}
+
+static void write_settings_text(const char *text)
+{
+    FILE *f = _wfopen(g_settings_file, L"wb");
+    if (!f)
+        return;
+    fputs(text, f);
+    fclose(f);
+}
+
+/* Returns 0 when the file cannot be opened; buf is then empty. */
+static int read_settings_text(char *buf, size_t cap)
+{
+    FILE *f = _wfopen(g_settings_file, L"rb");
+    size_t n;
+    buf[0] = '\0';
+    if (!f)
+        return 0;
+    n = fread(buf, 1, cap - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+    return 1;
+}
+
+static void test_settings_palette(void)
+{
+    char name[128];
+    char text[512];
+    wchar_t long_name[131];
+
+    note("== settings palette (settings.c, MKW_SETTINGS_DIR sandbox) ==");
+
+    if (!settings_sandbox_setup()) {
+        check(0, "settings sandbox folder could not be set up");
+        return;
+    }
+
+    /* No file yet: first run keeps the default palette. */
+    check(settings_load_palette(name, sizeof name) == SETTINGS_NOT_FOUND,
+          "no settings file: status is NOT_FOUND (expected 1)");
+    check(strcmp(name, "Wii Blanco") == 0,
+          "no settings file: palette is %s (expected Wii Blanco)", name);
+
+    /* Save, then load the same name back. */
+    check(settings_save_palette(L"Metroid Prime (visor)") == 0,
+          "save Metroid Prime (visor) returns 0");
+    check(settings_load_palette(name, sizeof name) == SETTINGS_OK,
+          "load after save: status is OK (expected 0)");
+    check(strcmp(name, "Metroid Prime (visor)") == 0,
+          "load after save: palette is %s (expected Metroid Prime (visor))", name);
+
+    /* Saving the palette keeps the saved language and theme in the same file. */
+    write_settings_text("{\"language\":\"es\",\"theme\":\"dark\"}\n");
+    check(settings_save_palette(L"Wii Azul") == 0,
+          "save Wii Azul over a file with language and theme returns 0");
+    read_settings_text(text, sizeof text);
+    check(strstr(text, "\"language\":\"es\"") != NULL,
+          "file keeps language es after a palette save");
+    check(strstr(text, "\"theme\":\"dark\"") != NULL,
+          "file keeps theme dark after a palette save");
+    check(strstr(text, "\"palette\":\"Wii Azul\"") != NULL,
+          "file stores palette Wii Azul after a palette save");
+
+    /* A file without the palette key gives the default, reported as invalid. */
+    write_settings_text("{\"language\":\"en\",\"theme\":\"light\"}\n");
+    check(settings_load_palette(name, sizeof name) == SETTINGS_INVALID,
+          "file without palette key: status is INVALID (expected 2)");
+    check(strcmp(name, "Wii Blanco") == 0,
+          "file without palette key: palette is %s (expected Wii Blanco)", name);
+
+    /* Names with escapes or empty values are not palettes. */
+    write_settings_text("{\"palette\":\"Wii \\\"Azul\\\"\"}\n");
+    settings_load_palette(name, sizeof name);
+    check(strcmp(name, "Wii Blanco") == 0,
+          "escaped quotes in file: palette is %s (expected Wii Blanco)", name);
+
+    write_settings_text("{\"palette\":\"Wii\\\\Azul\"}\n");
+    settings_load_palette(name, sizeof name);
+    check(strcmp(name, "Wii Blanco") == 0,
+          "backslash in file: palette is %s (expected Wii Blanco)", name);
+
+    write_settings_text("{\"palette\":\"\"}\n");
+    settings_load_palette(name, sizeof name);
+    check(strcmp(name, "Wii Blanco") == 0,
+          "empty palette in file: palette is %s (expected Wii Blanco)", name);
+
+    /* Saving a name with a quote or backslash fails and keeps the old file. */
+    check(settings_save_palette(L"Wii Azul") == 0,
+          "save Wii Azul again returns 0");
+    check(settings_save_palette(L"Wii \"X\"") == -1,
+          "save with a quote returns -1 (expected -1)");
+    check(settings_save_palette(L"Wii \\X") == -1,
+          "save with a backslash returns -1 (expected -1)");
+    settings_load_palette(name, sizeof name);
+    check(strcmp(name, "Wii Azul") == 0,
+          "rejected saves keep the file: palette is %s (expected Wii Azul)", name);
+
+    /* A name longer than the 128-byte UTF-8 buffer does not fit. */
+    wmemset(long_name, L'A', 130);
+    long_name[130] = L'\0';
+    check(settings_save_palette(long_name) == -1,
+          "save of a 130-character name returns -1 (expected -1)");
+
+    settings_sandbox_teardown();
+}
+
 /* -------------------------------------------------------------------- main --- */
 
 int main(void)
@@ -439,6 +586,7 @@ int main(void)
     test_texto_secundario();
     test_catalog_getters();
     test_catalog_contrast();
+    test_settings_palette();
 
     {
         char line[200];
