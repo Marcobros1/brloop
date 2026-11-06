@@ -568,6 +568,74 @@ static void test_settings_palette(void)
     settings_sandbox_teardown();
 }
 
+/* Compares the whole file with the exact text write_settings must produce:
+ * key order, quotes and the trailing newline. */
+static void check_settings_text(const char *expected, const char *what)
+{
+    char text[512];
+    read_settings_text(text, sizeof text);
+    check(strcmp(text, expected) == 0, "%s: file text matches the expected JSON", what);
+}
+
+/* write_settings is static: its format is reached through the public save
+ * calls, which rewrite all three keys. */
+static void test_settings_write_format(void)
+{
+    note("== settings write format (write_settings via the save calls) ==");
+
+    if (!settings_sandbox_setup()) {
+        check(0, "settings sandbox folder could not be set up");
+        return;
+    }
+
+    /* No file: theme falls back to system, palette to the default. */
+    check(settings_save_language(STR_LANG_ES) == 0,
+          "save language es without a file returns 0");
+    check_settings_text("{\"language\":\"es\",\"theme\":\"system\",\"palette\":\"Wii Blanco\"}\n",
+                        "first save, language es");
+
+    /* Invalid file: the save replaces it with the defaults for the other keys. */
+    write_settings_text("not json\n");
+    check(settings_save_language(STR_LANG_EN) == 0,
+          "save language en over an invalid file returns 0");
+    check_settings_text("{\"language\":\"en\",\"theme\":\"system\",\"palette\":\"Wii Blanco\"}\n",
+                        "invalid file replaced, language en");
+
+    /* Language en keeps the saved theme and palette. */
+    write_settings_text("{\"language\":\"es\",\"theme\":\"dark\",\"palette\":\"Metroid Prime (visor)\"}\n");
+    check(settings_save_language(STR_LANG_EN) == 0,
+          "save language en over a dark file returns 0");
+    check_settings_text("{\"language\":\"en\",\"theme\":\"dark\",\"palette\":\"Metroid Prime (visor)\"}\n",
+                        "language en keeps dark and Metroid");
+
+    /* Theme light keeps the saved language and palette. */
+    write_settings_text("{\"language\":\"es\",\"theme\":\"dark\",\"palette\":\"Wii Azul\"}\n");
+    check(settings_save_theme(THEME_LIGHT) == 0, "save theme light returns 0");
+    check_settings_text("{\"language\":\"es\",\"theme\":\"light\",\"palette\":\"Wii Azul\"}\n",
+                        "theme light keeps es and Wii Azul");
+
+    /* Theme system is the fallback branch of the theme text. */
+    write_settings_text("{\"language\":\"en\",\"theme\":\"light\",\"palette\":\"Wii Azul\"}\n");
+    check(settings_save_theme(THEME_SYSTEM) == 0, "save theme system returns 0");
+    check_settings_text("{\"language\":\"en\",\"theme\":\"system\",\"palette\":\"Wii Azul\"}\n",
+                        "theme system keeps en and Wii Azul");
+
+    /* Theme dark. */
+    write_settings_text("{\"language\":\"en\",\"theme\":\"light\",\"palette\":\"Wii Azul\"}\n");
+    check(settings_save_theme(THEME_DARK) == 0, "save theme dark returns 0");
+    check_settings_text("{\"language\":\"en\",\"theme\":\"dark\",\"palette\":\"Wii Azul\"}\n",
+                        "theme dark keeps en and Wii Azul");
+
+    /* Palette save keeps language es and theme light. */
+    write_settings_text("{\"language\":\"es\",\"theme\":\"light\",\"palette\":\"Wii Blanco\"}\n");
+    check(settings_save_palette(L"Metroid Prime (visor)") == 0,
+          "save palette Metroid over es and light returns 0");
+    check_settings_text("{\"language\":\"es\",\"theme\":\"light\",\"palette\":\"Metroid Prime (visor)\"}\n",
+                        "palette save keeps es and light");
+
+    settings_sandbox_teardown();
+}
+
 /* -------------------------------------------------------------------- main --- */
 
 int main(void)
@@ -587,6 +655,7 @@ int main(void)
     test_catalog_getters();
     test_catalog_contrast();
     test_settings_palette();
+    test_settings_write_format();
 
     {
         char line[200];
