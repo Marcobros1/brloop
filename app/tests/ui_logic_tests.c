@@ -286,6 +286,19 @@ static void test_palette_load_single_variant(void)
           "GameCube Jet Black (Oscuro only): light side copies Oscuro");
 }
 
+/* The variant argument is ignored: both sides load whatever it says. */
+static void test_palette_load_ignores_variant(void)
+{
+    Palette claro, oscuro;
+
+    note("== palette_load, variant argument is ignored ==");
+
+    check(palette_load("Metroid Prime (visor)", "Claro", &claro) == 1 &&
+          palette_load("Metroid Prime (visor)", "Oscuro", &oscuro) == 1 &&
+          memcmp(&claro, &oscuro, sizeof claro) == 0,
+          "Metroid Prime (visor): Claro and Oscuro requests fill the same palette");
+}
+
 static void test_palette_load_rejects(void)
 {
     Palette p;
@@ -421,6 +434,7 @@ int main(void)
     test_palette_selectors();
     test_palette_load_two_variants();
     test_palette_load_single_variant();
+    test_palette_load_ignores_variant();
     test_palette_load_rejects();
     test_texto_secundario();
     test_catalog_getters();
