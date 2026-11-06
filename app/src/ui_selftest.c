@@ -168,10 +168,10 @@ static void st_phase_library(void)
  * WM_COMMAND path as a real click, and the central block follows the mode. */
 static void st_phase_modes_theme(void)
 {
-    /* Arranca en modo Biblioteca (create_controls llama a set_active_mode(0)). */
+    /* Start in Library mode (create_controls calls set_active_mode(0)). */
     st_check(g_active_mode == 0, "arranca en modo Biblioteca");
 
-    /* Cambia a Ajustes: el bloque central (biblioteca) se oculta. */
+    /* Switch to Settings: the central block (library) is hidden. */
     send_cmd(IDC_BTN_MODE_SETTINGS);
     pump(50);
     st_check(g_active_mode == 2, "modo Ajustes activado");
@@ -180,8 +180,8 @@ static void st_phase_modes_theme(void)
     st_check((GetWindowLongPtrW((*g_test->controls).list, GWL_STYLE) & WS_VISIBLE) == 0,
              "lista oculta en modo Ajustes");
 
-    /* Tema y idioma desde los botones del panel de Ajustes (Q-121, Q-122).
-     * Los controles de Ajustes solo son visibles en este modo. */
+    /* Theme and language from the buttons in the Settings panel (Q-121, Q-122).
+     * The Settings controls are only visible in this mode. */
     send_cmd(IDC_BTN_THEME_LIGHT);
     pump(50);
     st_check(g_theme_choice == THEME_LIGHT, "tema claro seleccionado");
@@ -202,7 +202,7 @@ static void st_phase_modes_theme(void)
     pump(50);
     st_check(strings_language() == STR_LANG_ES, "idioma Espanol seleccionado");
 
-    /* Vuelve a Biblioteca: el bloque central reaparece. */
+    /* Back to Library: the central block reappears. */
     send_cmd(IDC_BTN_MODE_LIBRARY);
     pump(50);
     st_check(g_active_mode == 0, "modo Biblioteca restaurado");
@@ -286,9 +286,9 @@ static void st_phase_defensive(void)
     }
 }
 
-/* Phase 1c - biblioteca CRUD: añadir, seleccionar y quitar pistas usando los
- * ficheros sintéticos que llegan por la línea de comandos. Se ejecuta antes
- * de arrancar el transporte, con la biblioteca ya cargada y nada reproduciendo. */
+/* Phase 1c - library CRUD: add, select and remove tracks using the synthetic
+ * files passed on the command line. Runs before the transport starts, with the
+ * library already loaded and nothing playing. */
 static void st_phase_library_crud(void)
 {
     int before = (*g_test->row_count);
@@ -299,24 +299,22 @@ static void st_phase_library_crud(void)
         return;
     }
 
-    /* list_insert_row se ejecuta por add_track (ui_library.c:204) cada vez que
-     * una pista entra en la biblioteca. Compruebo que la fila realmente aparece
-     * en el ListView, no solo en el array, para cerrar el 0 de cobertura que
-     * reportaba OpenCppCoverage sobre esta función. */
+    /* list_insert_row runs from add_track each time a track enters the library.
+     * Check that the row appears in the ListView, not only in the array. */
     {
         int rows = ListView_GetItemCount((*g_test->controls).list);
         st_check(rows == before && rows >= 2,
                  "list_insert_row insertó la fila de cada pista añadida");
     }
 
-    /* Seleccionar la segunda pista (mismo handler que un clic en la lista). */
+    /* Select the second track (same handler as a click on the list). */
     ListView_SetItemState((*g_test->controls).list, 1, LVIS_SELECTED | LVIS_FOCUSED,
                           LVIS_SELECTED | LVIS_FOCUSED);
     pump(50);
     st_check((*g_test->selected) == 1 && (*g_test->snapshot).sample_rate > 0,
              "seleccionar la segunda pista la abre y rellena metadatos");
 
-    /* Añadir una pista que ya está en la lista debe rechazarse y no crecer. */
+    /* Adding a track already in the list must be refused and must not grow it. */
     {
         int before2 = (*g_test->row_count);
         int rc = g_test->add_track(g_test->add_track_context,
@@ -325,7 +323,7 @@ static void st_phase_library_crud(void)
                  "añadir una pista duplicada es rechazado");
     }
 
-    /* Quitar la pista seleccionada y volver a añadirla. */
+    /* Remove the selected track and add it back. */
     {
         const wchar_t *removedPath = g_test->library->rows[(*g_test->selected)].path;
         size_t removedPathLen = wcslen(removedPath) + 1;
@@ -347,9 +345,9 @@ static void st_phase_library_crud(void)
         }
     }
 
-    /* Deja una selección conocida (primera pista) para las fases siguientes.
-     * Se selecciona desde el estado "nada seleccionado" (tras el remove), lo
-     * mismo que hace phase_library al arrancar. */
+    /* Leave a known selection (first track) for the next phases.
+     * Select from the "nothing selected" state left by the remove, as
+     * phase_library does at startup. */
     ListView_SetItemState((*g_test->controls).list, 0, LVIS_SELECTED | LVIS_FOCUSED,
                           LVIS_SELECTED | LVIS_FOCUSED);
     pump(50);
@@ -358,11 +356,11 @@ static void st_phase_library_crud(void)
              "primera pista seleccionada y abierta tras el CRUD");
 }
 
-/* Phase 1d - "Anterior" desde la primera fila al principio de la canción:
- * position <= 3 s significa "pista anterior", que desde la primera fila
- * envuelve al último transporte (transport_previous_index devuelve count-1).
- * Esta rama nunca se recorre: el selftest solo probaba "anterior" desde una
- * fila distinta de cero y "reinicia canción" al final de la canción. */
+/* Phase 1d - "Anterior" (previous) from the first row at the start of the song:
+ * position <= 3 s means previous track, which from the first row wraps to the
+ * last one (transport_previous_index returns count-1). This branch is never
+ * reached: the selftest only tried "previous" from a non-zero row, and
+ * "restart song" at the end of the song. */
 static void st_phase_previous_wrap(void)
 {
     st_check((*g_test->selected) == 0 && (*g_test->snapshot).sample_rate > 0,
@@ -373,12 +371,11 @@ static void st_phase_previous_wrap(void)
                  && (*g_test->snapshot).sample_rate > 0,
              "anterior desde la primera fila envuelve al último registro");
 
-    /* Vuelve a la primera pista (estéreo, detenida) para que las fases de
-     * transporte arranquen desde el estado base que esperan. Como el list
-     * permite selección múltiple (sin LVS_SINGLESEL), el ítem 0 sigue marcado
-     * tras haber marcado el 1: hay que deseleccionar ambos antes de volver a
-     * marcar el 0, de otro modo no hay cambio de estado, no se dispara
-     * LVN_ITEMCHANGED y select_track(0) no se ejecuta. */
+    /* Back to the first track (stereo, stopped) so the transport phases start
+     * from the base state they expect. The list allows multiple selection (no
+     * LVS_SINGLESEL), so item 0 stays marked after item 1 was marked: clear both
+     * before selecting 0 again. Otherwise the state does not change, so
+     * LVN_ITEMCHANGED does not fire and select_track(0) does not run. */
     ListView_SetItemState((*g_test->controls).list, 0, 0, LVIS_SELECTED);
     ListView_SetItemState((*g_test->controls).list, 1, 0, LVIS_SELECTED);
     ListView_SetItemState((*g_test->controls).list, 0, LVIS_SELECTED | LVIS_FOCUSED,
@@ -758,9 +755,9 @@ static void st_phase_remove(void)
              "the replacement row still owns its name");
 }
 
-/* Phase 6 - "Limpiar": vacía la biblioteca y deshabilita el transporte hasta
- * que se seleccione una pista. Ejercita remove_all() y library_clear(),
- * nunca llamados por las fases previas. */
+/* Phase 6 - "Limpiar" (clear): empties the library and disables the transport
+ * until a track is selected. Exercises remove_all() and library_clear(), which
+ * earlier phases never call. */
 static void st_phase_clear(void)
 {
     send_cmd(IDC_BTN_CLEAR);
@@ -917,7 +914,7 @@ static void st_phase_paint(void)
     /* The system message is drawn in the secondary text colour. */
     SendMessageW(g_test->window, WM_CTLCOLORSTATIC,
                  (WPARAM)mem, (LPARAM)(*g_test->controls).valSystem);
-    want = dark ? UI_THEME_DARK_SECUNDARIO : UI_THEME_LIGHT_SECUNDARIO;
+    want = palette_text_secondary(&g_palette, dark);
     st_check(GetTextColor(mem) == want,
              "system message uses the secondary text colour");
 
@@ -934,15 +931,15 @@ static void st_phase_paint(void)
         dis.rcItem = box;
         g_active_mode = 0;
         SendMessageW(g_test->window, WM_DRAWITEM, 0, (LPARAM)&dis);
-        /* Pixel at the top-left inside corner, outside the 2px border. */
-        px = GetPixel(mem, 6, 6);
-        st_check(px == (dark ? UI_THEME_DARK_ACENTO : UI_THEME_LIGHT_ACENTO),
+        /* Centre of the box: far from the 2px border, independent of its size. */
+        px = GetPixel(mem, (box.left + box.right) / 2, (box.top + box.bottom) / 2);
+        st_check(px == palette_accent(&g_palette, dark),
                  "active mode button fills with the accent colour");
         /* Same button while Ajustes is the active mode: it is inactive now. */
         g_active_mode = 2;
         SendMessageW(g_test->window, WM_DRAWITEM, 0, (LPARAM)&dis);
-        px = GetPixel(mem, 6, 6);
-        st_check(px == (dark ? UI_THEME_DARK_SUPERFICIE : UI_THEME_LIGHT_SUPERFICIE),
+        px = GetPixel(mem, (box.left + box.right) / 2, (box.top + box.bottom) / 2);
+        st_check(px == palette_surface(&g_palette, dark),
                  "inactive mode button fills with the surface colour");
         g_active_mode = 0;
     }

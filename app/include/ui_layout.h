@@ -3,6 +3,10 @@
 
 #include "ui_state.h"
 
+/* Reads the window DPI and the text line height of g_font. Called once in
+ * WM_CREATE, before any control is positioned. */
+void layout_init(UINT dpi);
+
 /* Recompute every control position from the client size. Called on WM_SIZE
  * and once after creation. */
 void layout(void);

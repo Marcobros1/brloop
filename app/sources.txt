@@ -15,3 +15,6 @@ app/src/ui_state.c
 app/src/ui_layout.c
 app/src/ui_library.c
 app/src/ui_dialogs.c
+app/src/palette_names.c
+app/src/palette_table.c
+app/src/palette.c

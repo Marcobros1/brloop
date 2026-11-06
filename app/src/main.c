@@ -23,6 +23,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
+#include <math.h>
 
 #include "player.h"
 #include "ui_types.h"
@@ -46,6 +47,9 @@ void set_active_mode(int mode);
 /* ------------------------------------------------------------- app state --
  * All file-scope globals moved to ui_state.c / ui_state.h. main.c keeps only
  * the settings load status, which is defined near load_saved_language. */
+
+/* Active colour palette, filled by palette_load (startup and list picks). */
+Palette g_palette;
 
 /* Dark when Windows apps use the dark colour mode. Reads
  * HKCU\...\Themes\Personalize AppsUseLightTheme (0 = dark, 1 = light).
@@ -278,11 +282,11 @@ static void create_controls(HWND parent)
     g_controls.groupLib = make_ctl(parent, 0, L"BUTTON", tr(STR_LIBRARY_GROUP),
                               BS_GROUPBOX, 0, 0, 0, 0, 0);
     g_controls.btnOpen = make_ctl(parent, 0, L"BUTTON", tr(STR_BUTTON_OPEN),
-                             0, IDC_BTN_OPEN, 0, 0, 0, 0);
+                             BS_OWNERDRAW, IDC_BTN_OPEN, 0, 0, 0, 0);
     g_controls.btnRemove = make_ctl(parent, 0, L"BUTTON", tr(STR_BUTTON_REMOVE),
-                               0, IDC_BTN_REMOVE, 0, 0, 0, 0);
+                               BS_OWNERDRAW, IDC_BTN_REMOVE, 0, 0, 0, 0);
     g_controls.btnClear = make_ctl(parent, 0, L"BUTTON", tr(STR_BUTTON_CLEAR),
-                              0, IDC_BTN_CLEAR, 0, 0, 0, 0);
+                              BS_OWNERDRAW, IDC_BTN_CLEAR, 0, 0, 0, 0);
     g_controls.list = make_ctl(parent, WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
                           LVS_REPORT | LVS_SHOWSELALWAYS, IDC_LIST,
                           0, 0, 0, 0);
@@ -454,8 +458,8 @@ static void create_controls(HWND parent)
                               IDC_VAL_SPEED, 0, 0, 0, 0);
     g_controls.valDevRate = make_ctl(parent, 0, L"STATIC", tr(STR_DEVICE_RATE_EMPTY),
                                 SS_RIGHT, IDC_VAL_DEVRATE, 0, 0, 0, 0);
-    g_controls.btnSpeed = make_ctl(parent, 0, L"BUTTON", tr(STR_SPEED_NORMAL), 0,
-                              IDC_BTN_SPEED, 0, 0, 0, 0);
+    g_controls.btnSpeed = make_ctl(parent, 0, L"BUTTON", tr(STR_SPEED_NORMAL),
+                              BS_OWNERDRAW, IDC_BTN_SPEED, 0, 0, 0, 0);
 
     g_controls.status = CreateWindowExW(0, STATUSCLASSNAMEW, tr(STR_STATUS_READY),
                                    WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
@@ -742,6 +746,32 @@ static void set_theme(ThemeChoice choice)
     apply_theme();
 }
 
+/* Settings palette list: loads the picked catalogue entry and rebuilds the
+ * theme brushes (apply_theme repaints too). Keeps the old palette if the
+ * name cannot be read or loaded. */
+static void on_palette_changed(void)
+{
+    wchar_t wname[128];
+    char name[128];
+    LRESULT sel, len;
+
+    sel = SendMessageW(g_controls.lstPalette, LB_GETCURSEL, 0, 0);
+    if (sel == LB_ERR)
+        return;
+    len = SendMessageW(g_controls.lstPalette, LB_GETTEXTLEN, sel, 0);
+    if (len == LB_ERR || len >= (LRESULT)(sizeof wname / sizeof wname[0]))
+        return;
+    SendMessageW(g_controls.lstPalette, LB_GETTEXT, sel, (LPARAM)wname);
+    /* Catalogue names are ASCII, so the ANSI conversion is lossless. */
+    if (!narrow_path(wname, name, sizeof name))
+        return;
+    if (palette_load(name, "Claro", &g_palette)) {
+        if (!g_selftest_mode && settings_save_palette(wname) != 0)
+            set_status(tr(STR_SETTINGS_SAVE_FAILED));
+        apply_theme();
+    }
+}
+
 /* A2: activates a mode. Only the central block changes; the mode bar and
  * transport controls stay visible. The active mode is marked with color and
  * border when painted (WM_DRAWITEM). */
@@ -824,15 +854,34 @@ static void set_language(StrLanguage lang)
     update_ui();
 }
 
+/* Returns black or white text, whichever has the higher WCAG contrast
+ * ratio against `bg`. Luminance uses linearized sRGB channels. */
+static COLORREF pick_text_on(COLORREF bg)
+{
+    double r = (double)(GetRValue(bg)) / 255.0;
+    double g = (double)(GetGValue(bg)) / 255.0;
+    double b = (double)(GetBValue(bg)) / 255.0;
+    double lr = r <= 0.03928 ? r / 12.92 : pow((r + 0.055) / 1.055, 2.4);
+    double lg = g <= 0.03928 ? g / 12.92 : pow((g + 0.055) / 1.055, 2.4);
+    double lb = b <= 0.03928 ? b / 12.92 : pow((b + 0.055) / 1.055, 2.4);
+    double lum = 0.2126 * lr + 0.7152 * lg + 0.0722 * lb;
+    double vs_white = 1.05 / (lum + 0.05);
+    double vs_black = (lum + 0.05) / 0.05;
+    return vs_white >= vs_black ? RGB(0xFF, 0xFF, 0xFF) : RGB(0x00, 0x00, 0x00);
+}
+
 /* Main window procedure. WM_CREATE builds controls + timer; WM_NOTIFY turns
  * list selection into select_track(); WM_COMMAND routes buttons; the color
  * messages tint the state label by playback state; WM_DESTROY tears down
  * the engine, GDI objects and the message loop (PostQuitMessage). */
+static UINT dpi_for_window(HWND hwnd);
+
 static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
     case WM_CREATE:
         g_hwnd = hwnd;
+        layout_init(dpi_for_window(hwnd));
         load_saved_language();
         create_controls(hwnd);
         apply_theme();
@@ -853,14 +902,17 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_GETMINMAXINFO: {
         MINMAXINFO *mm = (MINMAXINFO *)lp;
-        mm->ptMinTrackSize.x = 760;
-        mm->ptMinTrackSize.y = 560;
+        UINT dpi = dpi_for_window(hwnd);
+        mm->ptMinTrackSize.x = MulDiv(760, (int)dpi, 96);
+        mm->ptMinTrackSize.y = MulDiv(560, (int)dpi, 96);
         return 0;
     }
 
     case WM_COMMAND:
         if (HIWORD(wp) == BN_CLICKED || HIWORD(wp) == 0)
             on_command((int)LOWORD(wp));
+        else if (HIWORD(wp) == LBN_SELCHANGE && LOWORD(wp) == IDC_LST_PALETTE)
+            on_palette_changed();
         return 0;
 
     case WM_NOTIFY: {
@@ -894,7 +946,29 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             || dis->CtlID == IDC_BTN_THEME_DARK) {
             wchar_t text[64];
             COLORREF text_fg = (dis->itemState & ODS_DISABLED)
-                ? GetSysColor(COLOR_GRAYTEXT) : UI_C_PRIMARIO;
+                ? GetSysColor(COLOR_GRAYTEXT) : pick_text_on(UI_C_SUPERFICIE);
+            HBRUSH text_bg = CreateSolidBrush(UI_C_SUPERFICIE);
+            GetWindowTextW(dis->hwndItem, text, 64);
+            FillRect(dis->hDC, &dis->rcItem, text_bg);
+            DeleteObject(text_bg);
+            SetBkMode(dis->hDC, TRANSPARENT);
+            SetTextColor(dis->hDC, text_fg);
+            SelectObject(dis->hDC, g_font);
+            DrawTextW(dis->hDC, text, -1, &dis->rcItem,
+                      DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            if (dis->itemState & ODS_FOCUS) {
+                RECT focus = dis->rcItem;
+                InflateRect(&focus, -3, -3);
+                DrawFocusRect(dis->hDC, &focus);
+            }
+            return TRUE;
+        }
+        /* Action buttons: open, remove, clear and speed use the palette surface. */
+        if (dis->CtlID == IDC_BTN_OPEN || dis->CtlID == IDC_BTN_REMOVE
+            || dis->CtlID == IDC_BTN_CLEAR || dis->CtlID == IDC_BTN_SPEED) {
+            wchar_t text[64];
+            COLORREF text_fg = (dis->itemState & ODS_DISABLED)
+                ? GetSysColor(COLOR_GRAYTEXT) : pick_text_on(UI_C_SUPERFICIE);
             HBRUSH text_bg = CreateSolidBrush(UI_C_SUPERFICIE);
             GetWindowTextW(dis->hwndItem, text, 64);
             FillRect(dis->hDC, &dis->rcItem, text_bg);
@@ -934,7 +1008,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             wchar_t text[64];
             GetWindowTextW(dis->hwndItem, text, 64);
             SetBkMode(dis->hDC, TRANSPARENT);
-            SetTextColor(dis->hDC, active ? RGB(0xFF, 0xFF, 0xFF) : UI_C_PRIMARIO);
+            SetTextColor(dis->hDC, active ? pick_text_on(UI_C_ACENTO) : UI_C_PRIMARIO);
             SelectObject(dis->hDC, g_font);
             DrawTextW(dis->hDC, text, -1, &dis->rcItem,
                       DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -1104,6 +1178,47 @@ static void load_args(int argc, wchar_t **argv)
         g_selftest_report = _wfopen(options.report_path, L"w");
 }
 
+/* DPI helpers. The newer APIs are looked up at run time so the app still
+ * starts on Windows versions that lack them. */
+typedef BOOL (WINAPI *SetDpiContextFn)(DPI_AWARENESS_CONTEXT);
+typedef UINT (WINAPI *GetDpiForWindowFn)(HWND);
+
+static void dpi_set_aware(void)
+{
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    SetDpiContextFn set_ctx = NULL;
+    if (user32)
+        set_ctx = (SetDpiContextFn)GetProcAddress(user32, "SetProcessDpiAwarenessContext");
+    if (set_ctx)
+        set_ctx(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+}
+
+/* DPI of the primary screen; used before any window exists. */
+static UINT dpi_screen(void)
+{
+    HDC dc = GetDC(NULL);
+    int dpi = 96;
+    if (dc) {
+        dpi = GetDeviceCaps(dc, LOGPIXELSY);
+        ReleaseDC(NULL, dc);
+    }
+    return dpi > 0 ? (UINT)dpi : 96;
+}
+
+static UINT dpi_for_window(HWND hwnd)
+{
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    GetDpiForWindowFn get_dpi = NULL;
+    if (user32)
+        get_dpi = (GetDpiForWindowFn)GetProcAddress(user32, "GetDpiForWindow");
+    if (get_dpi && hwnd) {
+        UINT dpi = get_dpi(hwnd);
+        if (dpi)
+            return dpi;
+    }
+    return dpi_screen();
+}
+
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
 {
     WNDCLASSEXW wc;
@@ -1114,11 +1229,21 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
     (void)prev;
     (void)cmd;
 
+    dpi_set_aware();
     argv = CommandLineToArgvW(GetCommandLineW(), &argc);
 
     /* The saved theme decides the palette; a missing or invalid file means SYSTEM. */
     settings_load_theme(&g_theme_choice);
     g_ui_theme_dark = theme_is_dark_for(g_theme_choice);
+
+    /* Saved palette, set before any brush or control reads UI_C_*. Wii Blanco
+     * is the fallback, the same entry the Settings list selects first (Q-112). */
+    {
+        char saved_palette[128];
+        settings_load_palette(saved_palette, sizeof saved_palette);
+        if (!palette_load(saved_palette, "Claro", &g_palette))
+            palette_load("Wii Blanco", "Claro", &g_palette);
+    }
 
     /* Selftest output must reach the caller's console when there is one. */
     if (argc > 1 && wcscmp(argv[1], L"--selftest") == 0
@@ -1144,7 +1269,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
         return 1;
 
     load_ui_font();
-    g_font = CreateFontW(-16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+    /* The window does not exist yet, so the font uses the screen DPI. */
+    g_font = CreateFontW(-MulDiv(16, (int)dpi_screen(), 96), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                          DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
                          CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                          DEFAULT_PITCH | FF_DONTCARE, UI_FONT_FACE);
@@ -1169,11 +1295,15 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
 
     /* Tracks are added after the window exists: add_track inserts into the
      * ListView, which is created during CreateWindowExW (WM_CREATE). */
-    g_hwnd = CreateWindowExW(0, L"BRLoopPlayer",
-                             tr(STR_WINDOW_TITLE),
-                             WS_OVERLAPPEDWINDOW,
-                             CW_USEDEFAULT, CW_USEDEFAULT, 940, 520,
-                             NULL, NULL, inst, NULL);
+    {
+        UINT dpi = dpi_screen();
+        g_hwnd = CreateWindowExW(0, L"BRLoopPlayer",
+                                 tr(STR_WINDOW_TITLE),
+                                 WS_OVERLAPPEDWINDOW,
+                                 CW_USEDEFAULT, CW_USEDEFAULT,
+                                 MulDiv(940, (int)dpi, 96), MulDiv(520, (int)dpi, 96),
+                                 NULL, NULL, inst, NULL);
+    }
     if (!g_hwnd) {
         player_destroy(g_player);
         LocalFree(argv);

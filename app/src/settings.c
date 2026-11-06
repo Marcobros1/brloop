@@ -114,9 +114,39 @@ static int parse_theme(const char *text, ThemeChoice *theme)
     return 0;
 }
 
-/* Writes both preferences in one file. Each save keeps the other one, so the
- * language and the theme never overwrite each other. */
-static int write_settings(StrLanguage language, ThemeChoice theme)
+/* Accepts "palette":"<name>". The name is copied without quotes. Names with
+ * escapes, empty names or names that do not fit are not palettes. */
+static int parse_palette(const char *text, char *out, size_t out_len)
+{
+    const char *p = strstr(text, "\"palette\"");
+    size_t len = 0;
+    if (!p)
+        return 0;
+    p += strlen("\"palette\"");
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
+        p++;
+    if (*p != ':')
+        return 0;
+    p++;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
+        p++;
+    if (*p != '"')
+        return 0;
+    p++;
+    while (*p != '"' && *p != '\0' && *p != '\\') {
+        if (len + 1 >= out_len)
+            return 0;
+        out[len++] = *p++;
+    }
+    if (*p != '"' || len == 0)
+        return 0;
+    out[len] = '\0';
+    return 1;
+}
+
+/* Writes all preferences in one file. Each save keeps the others, so the
+ * language, the theme and the palette never overwrite each other. */
+static int write_settings(StrLanguage language, ThemeChoice theme, const char *palette)
 {
     wchar_t folder[MAX_PATH];
     wchar_t path[MAX_PATH];
@@ -137,7 +167,8 @@ static int write_settings(StrLanguage language, ThemeChoice theme)
     f = _wfopen(path, L"wb");
     if (!f)
         return -1;
-    fprintf(f, "{\"language\":\"%s\",\"theme\":\"%s\"}\n", lang_code, theme_code);
+    fprintf(f, "{\"language\":\"%s\",\"theme\":\"%s\",\"palette\":\"%s\"}\n",
+            lang_code, theme_code, palette);
     if (fclose(f) != 0)
         return -1;
     return 0;
@@ -167,8 +198,10 @@ SettingsStatus settings_load_language(StrLanguage *language)
 int settings_save_language(StrLanguage language)
 {
     ThemeChoice theme = THEME_SYSTEM;
+    char palette[128];
     settings_load_theme(&theme);
-    return write_settings(language, theme);
+    settings_load_palette(palette, sizeof palette);
+    return write_settings(language, theme, palette);
 }
 
 SettingsStatus settings_load_theme(ThemeChoice *theme)
@@ -195,6 +228,46 @@ SettingsStatus settings_load_theme(ThemeChoice *theme)
 int settings_save_theme(ThemeChoice theme)
 {
     StrLanguage language = STR_LANG_EN;
+    char palette[128];
     settings_load_language(&language);
-    return write_settings(language, theme);
+    settings_load_palette(palette, sizeof palette);
+    return write_settings(language, theme, palette);
+}
+
+/* Reads the palette name. Missing or invalid values give "Wii Blanco". */
+SettingsStatus settings_load_palette(char *out, size_t out_len)
+{
+    wchar_t path[MAX_PATH];
+    char text[512];
+    long n;
+
+    strcpy(out, "Wii Blanco");
+    if (!settings_path(path, MAX_PATH))
+        return SETTINGS_NOT_FOUND;
+    n = read_file(path, text, sizeof text);
+    if (n == -2)
+        return SETTINGS_NOT_FOUND;
+    if (n < 0)
+        return SETTINGS_INVALID;
+    if (!parse_palette(text, out, out_len)) {
+        strcpy(out, "Wii Blanco");
+        return SETTINGS_INVALID;
+    }
+    return SETTINGS_OK;
+}
+
+/* Writes the palette name (UTF-8), keeping the saved language and theme.
+ * Returns 0 or -1. */
+int settings_save_palette(const wchar_t *name)
+{
+    char palette[128];
+    StrLanguage language = STR_LANG_EN;
+    ThemeChoice theme = THEME_SYSTEM;
+    if (!WideCharToMultiByte(CP_UTF8, 0, name, -1, palette, sizeof palette, NULL, NULL))
+        return -1;
+    if (strchr(palette, '"') || strchr(palette, '\\'))
+        return -1;
+    settings_load_language(&language);
+    settings_load_theme(&theme);
+    return write_settings(language, theme, palette);
 }

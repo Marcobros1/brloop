@@ -36,4 +36,10 @@ SettingsStatus settings_load_theme(ThemeChoice *theme);
 /* Writes the theme, keeping the saved language. Returns 0 or -1. */
 int settings_save_theme(ThemeChoice theme);
 
+/* Reads the palette name into out. Missing or invalid values give "Wii Blanco". */
+SettingsStatus settings_load_palette(char *out, size_t out_len);
+
+/* Writes the palette name, keeping the saved language and theme. Returns 0 or -1. */
+int settings_save_palette(const wchar_t *name);
+
 #endif /* SETTINGS_H */
