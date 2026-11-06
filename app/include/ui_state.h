@@ -20,6 +20,7 @@ extern HBRUSH g_brushBg;            /* client area background */
 extern HBRUSH g_brushBorde;         /* control borders */
 extern ThemeChoice g_theme_choice;  /* saved theme choice */
 extern int g_ui_theme_dark;         /* 1 = dark theme in force */
+extern Palette g_palette;           /* active catalogue palette (main.c) */
 extern int g_active_mode;           /* 0 = Biblioteca, 2 = Ajustes */
 extern LibraryState g_library;
 extern PlayerSnapshot g_player_snapshot;

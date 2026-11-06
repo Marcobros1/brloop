@@ -4,6 +4,8 @@
 #include <windows.h>
 #include <stdint.h>
 
+#include "palette.h"
+
 /* This header is the shared vocabulary between the Win32 window and the UI
  * selftest. Control IDs are kept here so a test can address the same commands
  * as a real click without importing main.c's implementation. */
@@ -112,24 +114,6 @@ typedef struct {
     HWND valLoopEnd;
 } Controls;
 
-/* Sepia palette (option C). Normal text is at least 4.5:1 on its panel colour. */
-
-/* Light theme */
-#define UI_THEME_LIGHT_FONDO      RGB(0xFD,0xF6,0xEE)
-#define UI_THEME_LIGHT_SUPERFICIE RGB(0xF3,0xE6,0xD4)
-#define UI_THEME_LIGHT_PRIMARIO   RGB(0x3E,0x2A,0x20)
-#define UI_THEME_LIGHT_SECUNDARIO RGB(0x7A,0x5E,0x4F)
-#define UI_THEME_LIGHT_ACENTO     RGB(0xA6,0x3A,0x00)
-#define UI_THEME_LIGHT_BORDE      RGB(0xD8,0xC3,0xA8)
-
-/* Dark theme */
-#define UI_THEME_DARK_FONDO       RGB(0x2B,0x1E,0x18)
-#define UI_THEME_DARK_SUPERFICIE  RGB(0x3A,0x28,0x20)
-#define UI_THEME_DARK_PRIMARIO    RGB(0xF3,0xE6,0xD4)
-#define UI_THEME_DARK_SECUNDARIO  RGB(0xC9,0xA6,0x87)
-#define UI_THEME_DARK_ACENTO      RGB(0xDD,0x79,0x35)
-#define UI_THEME_DARK_BORDE       RGB(0x4A,0x39,0x2F)
-
 /* Status text colours, each readable on its theme's panel colour. */
 #define UI_STATE_LIGHT_LOADING   RGB(0x5C,0x4A,0x3F)
 #define UI_STATE_LIGHT_PLAYING   RGB(0x2E,0x6B,0x2E)
@@ -140,12 +124,14 @@ typedef struct {
 #define UI_STATE_DARK_PAUSED     RGB(0xF2,0xB3,0x6B)
 #define UI_STATE_DARK_FINISHED   RGB(0xA9,0xC8,0xF0)
 
-/* Active theme (g_ui_theme_dark is defined in main.c). */
-#define UI_C_FONDO      (g_ui_theme_dark ? UI_THEME_DARK_FONDO      : UI_THEME_LIGHT_FONDO)
-#define UI_C_SUPERFICIE (g_ui_theme_dark ? UI_THEME_DARK_SUPERFICIE : UI_THEME_LIGHT_SUPERFICIE)
-#define UI_C_PRIMARIO   (g_ui_theme_dark ? UI_THEME_DARK_PRIMARIO   : UI_THEME_LIGHT_PRIMARIO)
-#define UI_C_SECUNDARIO (g_ui_theme_dark ? UI_THEME_DARK_SECUNDARIO : UI_THEME_LIGHT_SECUNDARIO)
-#define UI_C_ACENTO     (g_ui_theme_dark ? UI_THEME_DARK_ACENTO     : UI_THEME_LIGHT_ACENTO)
-#define UI_C_BORDE      (g_ui_theme_dark ? UI_THEME_DARK_BORDE      : UI_THEME_LIGHT_BORDE)
+/* Active colours, read from g_palette (defined in main.c) for the theme in
+ * force. The palette has no border field, so BORDE uses the primary text
+ * colour to keep frames visible on the background. */
+#define UI_C_FONDO      palette_background(&g_palette, g_ui_theme_dark)
+#define UI_C_SUPERFICIE palette_surface(&g_palette, g_ui_theme_dark)
+#define UI_C_PRIMARIO   palette_text(&g_palette, g_ui_theme_dark)
+#define UI_C_SECUNDARIO palette_text_secondary(&g_palette, g_ui_theme_dark)
+#define UI_C_ACENTO     palette_accent(&g_palette, g_ui_theme_dark)
+#define UI_C_BORDE      palette_text(&g_palette, g_ui_theme_dark)
 
 #endif /* UI_TYPES_H */

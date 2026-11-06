@@ -236,6 +236,41 @@ jobs:
           Invoke-CoreTool $chans @($stereo) "$cov\core-channels.xml" 0
           Invoke-CoreTool $chans @($bad) "$cov\core-channels-invalid.xml" 1
 
+      # Summary of uncovered lines per file, from the Cobertura reports above.
+      # Printed to the log only; it does not change the measure or the gate (Q-141).
+      - name: Summarise uncovered lines
+        if: always()
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem coverage -Filter '*.xml' -ErrorAction SilentlyContinue
+          if (-not $files) { Write-Host 'No coverage reports found.'; exit 0 }
+          # One line counts once per file: a line measured by several reports
+          # (selftest, logic tests, core tools) is covered if any report hits it.
+          $hits = @{}
+          foreach ($f in $files) {
+              [xml]$doc = Get-Content $f.FullName
+              foreach ($cls in $doc.SelectNodes('//class')) {
+                  $name = $cls.filename -replace '\\', '/'
+                  $name = $name -replace '^.*?/(app|core)/', '$1/'
+                  foreach ($ln in $cls.SelectNodes('.//line')) {
+                      $key = "$name|$($ln.number)"
+                      $hits[$key] = [int]$hits[$key] + [int]$ln.hits
+                  }
+              }
+          }
+          $perFile = @{}
+          foreach ($key in $hits.Keys) {
+              $name, $num = $key -split '\|'
+              if (-not $perFile.ContainsKey($name)) { $perFile[$name] = @{ total = 0; miss = @() } }
+              $perFile[$name].total++
+              if ($hits[$key] -eq 0) { $perFile[$name].miss += [int]$num }
+          }
+          Write-Host '== Uncovered lines per file (each line once) =='
+          foreach ($name in ($perFile.Keys | Sort-Object)) {
+              $m = @($perFile[$name].miss | Sort-Object)
+              Write-Host ("{0}: {1} of {2} uncovered: {3}" -f $name, $m.Count, $perFile[$name].total, ($m -join ','))
+          }
+
       - name: Cache SonarQube packages
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
