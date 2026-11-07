@@ -137,8 +137,9 @@ void set_name_fitted(const wchar_t *name)
  * WM_SIZE and once after creation. Every size is scaled by the window DPI
  * (scale), and text rows take their height from the font (text_h). The
  * window enforces a 760x560 minimum at the same DPI in WM_GETMINMAXINFO.
- * Left column = library (width clamped 300..440 at 96 DPI), right column =
- * info / transport / speed panels. */
+ * Left column = library (60 % of the usable width), right column = info
+ * card (fills the free height) over the speed box (content height).
+ * Settings mode centres its block in the whole central panel. */
 void layout(void)
 {
     RECT rc;
@@ -151,7 +152,7 @@ void layout(void)
     int modeBarH = text_h(10);
     int playH = scale(134);
     int leftW, rightX, rightW, topH, contentY;
-    int bannerH = scale(116);
+    int bannerH, speedH;
     int x0, col2, y, gy, sy;
     int prevW = scale(84), playW = scale(104), nextW = scale(96), btnGap = scale(12);
 
@@ -185,9 +186,11 @@ void layout(void)
 
     contentY = m + modeBarH + g;
 
-    leftW = cw * 46 / 100;
-    if (leftW < scale(300)) leftW = scale(300);
-    if (leftW > scale(440)) leftW = scale(440);
+    /* Library takes 60 % of the usable width; the right column keeps at
+     * least 340 design px and has no upper limit for the library (Q-144). */
+    leftW = (cw - 2 * m - g) * 60 / 100;
+    if (cw - 2 * m - g - leftW < scale(340))
+        leftW = cw - 2 * m - g - scale(340);
     rightX = m + leftW + g;
     rightW = cw - rightX - m;
     x0 = rightX + pad;
@@ -195,6 +198,11 @@ void layout(void)
 
     /* gBottom: real gap between the left/right column and the playback box. */
     topH = ch - statusH - 2 * m - playH - modeBarH - g - gBottom;
+
+    /* Speed box has the height of its content (title, label, button).
+     * The banner card takes the rest of the column (Q-145). */
+    speedH = scale(60) + btnH + scale(14);
+    bannerH = topH - speedH - g;
 
     /* Central block: only the active mode is shown. */
     if (g_active_mode == 0) { /* Library: list + banner card (B1) */
@@ -227,7 +235,7 @@ void layout(void)
 
         /* Speed below the card, with the version button right under it. */
         sy = contentY + bannerH + g;
-        move_ctl(g_controls.groupSpeed, rightX, sy, rightW, topH - bannerH - g);
+        move_ctl(g_controls.groupSpeed, rightX, sy, rightW, speedH);
         move_ctl(g_controls.valSpeed, rightX + pad, sy + scale(28), scale(84), lineH);
         move_ctl(g_controls.valDevRate, rightX + rightW - pad - scale(170), sy + scale(28), scale(170), lineH);
         move_ctl(g_controls.btnSpeed, rightX + (rightW - scale(200)) / 2, sy + scale(60), scale(200), btnH);
@@ -236,8 +244,13 @@ void layout(void)
      * (Q-121, Q-122). Three fieldsets stacked vertically; controls are
      * created in create_controls() and only positioned here. */
     {
-        int sx = rightX + pad;
-        int sw = rightW - scale(24);
+        /* Block centred in the central panel, at most 440 design px wide. */
+        int areaW = cw - 2 * m;
+        int sw = areaW - 2 * pad;
+        int sx;
+        if (sw > scale(440))
+            sw = scale(440);
+        sx = m + (areaW - sw) / 2;
         int fy = contentY;
         int fh = scale(44);
         int gap = scale(14);
