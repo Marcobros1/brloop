@@ -121,7 +121,10 @@ try {
     # Headless UI-logic tests: no window, no audio. Built from the same
     # common sources as player_tests.exe (window UI code is excluded).
     # /Zi: PDB so CI can measure this test binary with OpenCppCoverage.
-    Invoke-Native $cl (@($playerFlags) + $srcCommon + @((Join-Path $root 'tests\ui_logic_tests.c'), '/Fe:ui_logic_tests.exe', '/Zi') + $testLink)
+    # /Od instead of /O2: with /O2 OpenCppCoverage does not attribute the
+    # palette rename migration loop in settings.c (Q-148). The app keeps /O2.
+    $testFlags = @($playerFlags | Where-Object { $_ -ne '/O2' }) + @('/Od')
+    Invoke-Native $cl (@($testFlags) + $srcCommon + @((Join-Path $root 'tests\ui_logic_tests.c'), '/Fe:ui_logic_tests.exe', '/Zi') + $testLink)
 }
 finally {
     Pop-Location
