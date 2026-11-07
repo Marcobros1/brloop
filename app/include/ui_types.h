@@ -44,6 +44,7 @@
 #define IDC_CAP_LOOPST    1036
 #define IDC_CAP_PATH      1037
 #define IDC_CAP_VER       1038
+#define IDC_BTN_PAIR      1012
 /* Removed: IDC_BTN_LANG / IDC_BTN_THEME and the IDM_LANG_* / IDM_THEME_*
  * menu commands. Language and theme now live in the Settings panel, raised
  * as button commands instead of a bottom-bar menu (Q-121, Q-122). */
@@ -98,6 +99,7 @@ typedef struct {
     HWND btnOpen, btnRemove, btnClear;
     HWND btnPlay, btnPrevious, btnNext;
     HWND btnSpeed;
+    HWND btnPair, capVer;
     HWND btnModeLibrary, btnModeSettings;
     /* Settings panel controls (Q-121, Q-122). */
     HWND btnLangEn, btnLangEs;

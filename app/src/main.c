@@ -460,6 +460,11 @@ static void create_controls(HWND parent)
                                 SS_RIGHT, IDC_VAL_DEVRATE, 0, 0, 0, 0);
     g_controls.btnSpeed = make_ctl(parent, 0, L"BUTTON", tr(STR_SPEED_NORMAL),
                               BS_OWNERDRAW, IDC_BTN_SPEED, 0, 0, 0, 0);
+    g_controls.capVer = make_ctl(parent, 0, L"STATIC", tr(STR_CAP_VERSION), 0,
+                            IDC_CAP_VER, 0, 0, 0, 0);
+    g_controls.btnPair = make_ctl(parent, 0, L"BUTTON", L"\u2014", BS_OWNERDRAW,
+                             IDC_BTN_PAIR, 0, 0, 0, 0);
+    SetWindowTheme(g_controls.btnPair, L"", L"");
 
     g_controls.status = CreateWindowExW(0, STATUSCLASSNAMEW, tr(STR_STATUS_READY),
                                    WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
@@ -477,6 +482,7 @@ static void create_controls(HWND parent)
     EnableWindow(g_controls.btnRemove, FALSE);
     EnableWindow(g_controls.btnClear, FALSE);
     EnableWindow(g_controls.checkLoop, FALSE);
+    EnableWindow(g_controls.btnPair, FALSE);
 }
 
 /* ----------------------------------------------------------------- UI --- */
@@ -588,6 +594,21 @@ static void on_command(int id)
                     ? PLAYER_SPEED_SCALE
                     : PLAYER_FLSM_SPEED_PPM);
         break;
+    case IDC_BTN_PAIR: {
+        PlayerSnapshot s = player_get_state(g_player);
+        wchar_t msg[80];
+        int next;
+        /* The UI never offers the engine's internal mix-all value (-1). */
+        next = transport_next_pair(s.pair_sel, s.pair_count);
+        if (next < 0)
+            break;
+        if (player_set_channel_pair(g_player, next) != 0)
+            break;
+        swprintf(msg, 80, tr(STR_VERSION_SELECTED),
+                 next + 1, next * 2 + 1, next * 2 + 2);
+        set_status(msg);
+        break;
+    }
     default:
         break;
     }
@@ -658,6 +679,7 @@ static void relabel_controls(void)
     SetWindowTextW(g_controls.valState, L"");
     SetWindowTextW(g_controls.btnPlay, L"");
     SetWindowTextW(g_controls.btnSpeed, L"");
+    SetWindowTextW(g_controls.btnPair, L"");
     SetWindowTextW(g_controls.valDevRate, L"");
     InvalidateRect(g_hwnd, NULL, TRUE);
 }
@@ -803,6 +825,8 @@ void set_active_mode(int mode)
     ctl_show(g_controls.valSpeed, bib);
     ctl_show(g_controls.valDevRate, bib);
     ctl_show(g_controls.btnSpeed, bib);
+    ctl_show(g_controls.btnPair, bib);
+    ctl_show(g_controls.capVer, bib);
 
     /* Fields the banner card (B1) does not show. */
     ctl_show(g_controls.capSamples, 0);
@@ -904,7 +928,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         MINMAXINFO *mm = (MINMAXINFO *)lp;
         UINT dpi = dpi_for_window(hwnd);
         mm->ptMinTrackSize.x = MulDiv(760, (int)dpi, 96);
-        mm->ptMinTrackSize.y = MulDiv(560, (int)dpi, 96);
+        mm->ptMinTrackSize.y = MulDiv(570, (int)dpi, 96);
         return 0;
     }
 
@@ -963,9 +987,10 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             }
             return TRUE;
         }
-        /* Action buttons: open, remove, clear and speed use the palette surface. */
+        /* Action buttons: open, remove, clear, speed and version use the palette surface. */
         if (dis->CtlID == IDC_BTN_OPEN || dis->CtlID == IDC_BTN_REMOVE
-            || dis->CtlID == IDC_BTN_CLEAR || dis->CtlID == IDC_BTN_SPEED) {
+            || dis->CtlID == IDC_BTN_CLEAR || dis->CtlID == IDC_BTN_SPEED
+            || dis->CtlID == IDC_BTN_PAIR) {
             wchar_t text[64];
             COLORREF text_fg = (dis->itemState & ODS_DISABLED)
                 ? GetSysColor(COLOR_GRAYTEXT) : pick_text_on(UI_C_SUPERFICIE);
@@ -1083,6 +1108,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             || ctl == g_controls.btnLangEn || ctl == g_controls.btnLangEs
             || ctl == g_controls.btnThemeSystem || ctl == g_controls.btnThemeLight
             || ctl == g_controls.btnThemeDark || ctl == g_controls.btnSpeed
+            || ctl == g_controls.btnPair
             || ctl == g_controls.btnModeLibrary
             || ctl == g_controls.btnModeSettings) {
             brush = g_brushFace;
