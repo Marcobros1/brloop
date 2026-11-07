@@ -136,7 +136,7 @@ void set_name_fitted(const wchar_t *name)
 /* Recompute every control position from the client size. Called on
  * WM_SIZE and once after creation. Every size is scaled by the window DPI
  * (scale), and text rows take their height from the font (text_h). The
- * window enforces a 760x560 minimum at the same DPI in WM_GETMINMAXINFO.
+ * window enforces a 760x570 minimum at the same DPI in WM_GETMINMAXINFO.
  * Left column = library (60 % of the usable width), right column = info
  * card (fills the free height) over the speed box (content height).
  * Settings mode centres its block in the whole central panel. */
@@ -201,7 +201,8 @@ void layout(void)
 
     /* Speed box has the height of its content (title, label, button).
      * The banner card takes the rest of the column (Q-145). */
-    speedH = scale(60) + btnH + scale(14);
+    /* Room for the speed button, the version button and its label. */
+    speedH = scale(60) + btnH + scale(8) + btnH + scale(8) + text_h(1) + scale(14);
     bannerH = topH - speedH - g;
 
     /* Central block: only the active mode is shown. */
@@ -239,6 +240,9 @@ void layout(void)
         move_ctl(g_controls.valSpeed, rightX + pad, sy + scale(28), scale(84), lineH);
         move_ctl(g_controls.valDevRate, rightX + rightW - pad - scale(170), sy + scale(28), scale(170), lineH);
         move_ctl(g_controls.btnSpeed, rightX + (rightW - scale(200)) / 2, sy + scale(60), scale(200), btnH);
+        /* Version button right under the speed button (restored, Q-149). */
+        move_ctl(g_controls.btnPair, rightX + (rightW - scale(200)) / 2, sy + scale(60) + btnH + scale(8), scale(200), btnH);
+        move_ctl(g_controls.capVer, rightX + pad, sy + scale(60) + btnH + scale(8) + btnH + scale(8), rightW - scale(24), text_h(1));
     }
     /* Settings (mode 2): language, theme and palette in the central block
      * (Q-121, Q-122). Three fieldsets stacked vertically; controls are

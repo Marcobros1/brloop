@@ -328,6 +328,26 @@ void update_ui(void)
             SetWindowTextW(g_controls.btnSpeed, speedText);
     }
 
+    /* Version button: its caption is the current channel pair. */
+    {
+        wchar_t pairText[64], cur[64];
+        const wchar_t *want;
+        if (s.channels == 0) {
+            want = tr(STR_NO_TRACK_VALUE);
+        } else if (s.pair_count == 0) {
+            want = tr(STR_VERSION_STEREO);
+        } else {
+            int pair = s.pair_sel < 0 ? 0 : s.pair_sel;
+            swprintf(pairText, 64, tr(STR_VERSION_CAPTION),
+                     pair + 1, pair * 2 + 1, pair * 2 + 2);
+            want = pairText;
+        }
+        GetWindowTextW(g_controls.btnPair, cur, 64);
+        if (wcscmp(cur, want) != 0)
+            SetWindowTextW(g_controls.btnPair, want);
+        EnableWindow(g_controls.btnPair, s.pair_count > 0);
+    }
+
     if (s.file_loop)
         SendMessageW(g_controls.checkLoop, BM_SETCHECK,
                      s.loop_enabled ? BST_CHECKED : BST_UNCHECKED, 0);

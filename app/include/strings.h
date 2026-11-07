@@ -74,6 +74,10 @@ typedef enum {
     X(STR_DEVICE_RATE,          L"Dispositivo: %u Hz",         L"Device: %u Hz") \
     X(STR_DEVICE_RATE_STEREO,   L"Dispositivo: %u Hz · estéreo", L"Device: %u Hz · stereo") \
     X(STR_DEVICE_RATE_EMPTY,    L"Dispositivo: —",             L"Device: —") \
+    X(STR_CAP_VERSION,          L"Versión:",                   L"Version:") \
+    X(STR_VERSION_STEREO,       L"Estéreo",                    L"Stereo") \
+    X(STR_VERSION_CAPTION,      L"Versión %d · canales %d-%d", L"Version %d · channels %d-%d") \
+    X(STR_NO_TRACK_VALUE,       L"—",                          L"—") \
     X(STR_TIME_SEPARATOR,       L":",                          L":") \
     X(STR_LOOP_END_POSITION,    L"%llu (fin del archivo)",     L"%llu (end of file)") \
     X(STR_LOOP_POSITION,        L"%u (%s)",                    L"%u (%s)") \
