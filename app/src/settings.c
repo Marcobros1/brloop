@@ -114,6 +114,46 @@ static int parse_theme(const char *text, ThemeChoice *theme)
     return 0;
 }
 
+/* Palette names used before the descriptors were dropped (Q-146). A saved
+ * old name is translated on read; the next save writes the new name. */
+static const struct {
+    const char *old_name;
+    const char *new_name;
+} palette_renames[] = {
+    { "Animal Crossing (verdes)", "Animal Crossing" },
+    { "Mario Kart Wii (aro azul)", "Mario Kart Wii" },
+    { "Metroid Prime (visor)", "Metroid Prime" },
+    { "Metroid Prime 2 (Dark Visor)", "Metroid Prime 2" },
+    { "Metroid Prime 3 (Phazon)", "Metroid Prime 3" },
+    { "New Super Mario Bros. Wii (cielo)", "New Super Mario Bros. Wii" },
+    { "Resident Evil 4 (apagado)", "Resident Evil 4" },
+    { "Smash Brawl (modos)", "Smash Brawl" },
+    { "Super Mario Galaxy (oscura)", "Super Mario Galaxy" },
+    { "Super Mario Galaxy 2 (clara)", "Super Mario Galaxy 2" },
+    { "Super Mario Sunshine (mar)", "Super Mario Sunshine" },
+    { "Wii Fit (verde salud)", "Wii Fit" },
+    { "Wii Sports (azul y gris)", "Wii Sports" },
+    { "Wii Sports Resort (resort)", "Wii Sports Resort" },
+    { "Zelda Skyward Sword (acuarela)", "Zelda Skyward Sword" },
+    { "Zelda Twilight Princess (apagado)", "Zelda Twilight Princess" },
+    { "Zelda Wind Waker (mar)", "Zelda Wind Waker" },
+};
+
+/* Translates a pre-Q-146 name in place. Names that are already current, or
+ * unknown, are left as they are. */
+static void migrate_palette_name(char *name, size_t name_len)
+{
+    size_t i;
+
+    for (i = 0; i < sizeof palette_renames / sizeof palette_renames[0]; i++) {
+        if (strcmp(name, palette_renames[i].old_name) == 0) {
+            strncpy(name, palette_renames[i].new_name, name_len - 1);
+            name[name_len - 1] = '\0';
+            return;
+        }
+    }
+}
+
 /* Accepts "palette":"<name>". The name is copied without quotes. Names with
  * escapes, empty names or names that do not fit are not palettes. */
 static int parse_palette(const char *text, char *out, size_t out_len)
@@ -253,6 +293,7 @@ SettingsStatus settings_load_palette(char *out, size_t out_len)
         strcpy(out, "Wii Blanco");
         return SETTINGS_INVALID;
     }
+    migrate_palette_name(out, out_len);
     return SETTINGS_OK;
 }
 

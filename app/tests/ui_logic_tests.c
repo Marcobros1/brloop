@@ -244,9 +244,9 @@ static void test_palette_load_two_variants(void)
         const char *name;
         COLORREF light, dark;
     } cases[] = {
-        { "Metroid Prime (visor)", RGB(0xD8, 0xC7, 0xA8), RGB(0x47, 0x31, 0x18) },
+        { "Metroid Prime", RGB(0xD8, 0xC7, 0xA8), RGB(0x47, 0x31, 0x18) },
         { "Super Smash Bros. Melee", RGB(0x5E, 0x92, 0xC7), RGB(0x38, 0x58, 0x77) },
-        { "Resident Evil 4 (apagado)", RGB(0xB8, 0xB4, 0xB0), RGB(0x5A, 0x1A, 0x22) },
+        { "Resident Evil 4", RGB(0xB8, 0xB4, 0xB0), RGB(0x5A, 0x1A, 0x22) },
         { "GameCube Spice", RGB(0xFD, 0xF6, 0xEF), RGB(0x1E, 0x14, 0x10) },
     };
     Palette p;
@@ -260,7 +260,7 @@ static void test_palette_load_two_variants(void)
               "%s: background light/dark are its Claro/Oscuro bg", cases[i].name);
     }
 
-    check(palette_load("Metroid Prime (visor)", "Claro", &p) == 1 &&
+    check(palette_load("Metroid Prime", "Claro", &p) == 1 &&
           p.surface.light == RGB(0xDE, 0xCF, 0xB5) && p.surface.dark == RGB(0x3C, 0x2A, 0x14) &&
           p.text.light == RGB(0x00, 0x00, 0x00) && p.text.dark == RGB(0xFF, 0xFF, 0xFF) &&
           p.accent.light == RGB(0x0A, 0x5D, 0x6B) && p.accent.dark == RGB(0x5F, 0xD3, 0xE6) &&
@@ -298,8 +298,8 @@ static void test_palette_load_ignores_variant(void)
 
     note("== palette_load, variant argument is ignored ==");
 
-    check(palette_load("Metroid Prime (visor)", "Claro", &claro) == 1 &&
-          palette_load("Metroid Prime (visor)", "Oscuro", &oscuro) == 1 &&
+    check(palette_load("Metroid Prime", "Claro", &claro) == 1 &&
+          palette_load("Metroid Prime", "Oscuro", &oscuro) == 1 &&
           memcmp(&claro, &oscuro, sizeof claro) == 0,
           "Metroid Prime (visor): Claro and Oscuro requests fill the same palette");
 }
@@ -317,7 +317,7 @@ static void test_palette_load_rejects(void)
 }
 
 /* Secondary text: 70% text over 30% surface, per channel, integer division.
- * Metroid Prime (visor) Claro: text 000000, surface DECFB5 -> 66,62,54.
+ * Metroid Prime Claro: text 000000, surface DECFB5 -> 66,62,54.
  * Oscuro: text FFFFFF, surface 3C2A14 -> 196,191,184. */
 static void test_texto_secundario(void)
 {
@@ -325,7 +325,7 @@ static void test_texto_secundario(void)
 
     note("== text_secondary (70%% text over 30%% surface) ==");
 
-    check(palette_load("Metroid Prime (visor)", "Claro", &p) == 1 &&
+    check(palette_load("Metroid Prime", "Claro", &p) == 1 &&
           palette_text_secondary(&p, 0) == RGB(66, 62, 54) &&
           palette_text_secondary(&p, 1) == RGB(196, 191, 184),
           "Metroid Prime (visor): text_secondary is the 70/30 mix per theme");
@@ -339,7 +339,7 @@ static void test_catalog_getters(void)
     note("== catalog table getters ==");
 
     check(n == 38 && first != NULL &&
-          strcmp(first->name, "Super Mario Galaxy 2 (clara)") == 0 &&
+          strcmp(first->name, "Super Mario Galaxy 2") == 0 &&
           palette_table_get(n - 1) != NULL && palette_table_get(n) == NULL,
           "catalog: %lu rows, first row matches, get(count) is NULL",
           (unsigned long)n);
@@ -506,11 +506,11 @@ static void test_settings_palette(void)
           "no settings file: palette is %s (expected Wii Blanco)", name);
 
     /* Save, then load the same name back. */
-    check(settings_save_palette(L"Metroid Prime (visor)") == 0,
+    check(settings_save_palette(L"Metroid Prime") == 0,
           "save Metroid Prime (visor) returns 0");
     check(settings_load_palette(name, sizeof name) == SETTINGS_OK,
           "load after save: status is OK (expected 0)");
-    check(strcmp(name, "Metroid Prime (visor)") == 0,
+    check(strcmp(name, "Metroid Prime") == 0,
           "load after save: palette is %s (expected Metroid Prime (visor))", name);
 
     /* Saving the palette keeps the saved language and theme in the same file. */
@@ -524,6 +524,16 @@ static void test_settings_palette(void)
           "file keeps theme dark after a palette save");
     check(strstr(text, "\"palette\":\"Wii Azul\"") != NULL,
           "file stores palette Wii Azul after a palette save");
+
+    /* A saved pre-Q-146 name is translated to the current one on read. */
+    write_settings_text("{\"language\":\"es\",\"theme\":\"dark\",\"palette\":\"Metroid Prime (visor)\"}\n");
+    check(settings_load_palette(name, sizeof name) == SETTINGS_OK &&
+          strcmp(name, "Metroid Prime") == 0,
+          "old name Metroid Prime (visor) is read as Metroid Prime");
+    write_settings_text("{\"language\":\"es\",\"theme\":\"dark\",\"palette\":\"Zelda Wind Waker (mar)\"}\n");
+    check(settings_load_palette(name, sizeof name) == SETTINGS_OK &&
+          strcmp(name, "Zelda Wind Waker") == 0,
+          "old name Zelda Wind Waker (mar) is read as Zelda Wind Waker");
 
     /* A file without the palette key gives the default, reported as invalid. */
     write_settings_text("{\"language\":\"en\",\"theme\":\"light\"}\n");
@@ -605,7 +615,7 @@ static void test_settings_write_format(void)
     write_settings_text("{\"language\":\"es\",\"theme\":\"dark\",\"palette\":\"Metroid Prime (visor)\"}\n");
     check(settings_save_language(STR_LANG_EN) == 0,
           "save language en over a dark file returns 0");
-    check_settings_text("{\"language\":\"en\",\"theme\":\"dark\",\"palette\":\"Metroid Prime (visor)\"}\n",
+    check_settings_text("{\"language\":\"en\",\"theme\":\"dark\",\"palette\":\"Metroid Prime\"}\n",
                         "language en keeps dark and Metroid");
 
     /* Theme light keeps the saved language and palette. */
@@ -628,9 +638,9 @@ static void test_settings_write_format(void)
 
     /* Palette save keeps language es and theme light. */
     write_settings_text("{\"language\":\"es\",\"theme\":\"light\",\"palette\":\"Wii Blanco\"}\n");
-    check(settings_save_palette(L"Metroid Prime (visor)") == 0,
+    check(settings_save_palette(L"Metroid Prime") == 0,
           "save palette Metroid over es and light returns 0");
-    check_settings_text("{\"language\":\"es\",\"theme\":\"light\",\"palette\":\"Metroid Prime (visor)\"}\n",
+    check_settings_text("{\"language\":\"es\",\"theme\":\"light\",\"palette\":\"Metroid Prime\"}\n",
                         "palette save keeps es and light");
 
     settings_sandbox_teardown();
