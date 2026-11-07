@@ -1,5 +1,5 @@
 # Packages the BRLoop release zip from a fresh app build.
-# Usage: powershell -ExecutionPolicy Bypass -File tools\make_release.ps1 -Version 1.0.0
+# Usage: powershell -ExecutionPolicy Bypass -File tools\make_release.ps1 -Version 1.0.1
 # Output: dist\BRLoop-<Version>-win64.zip
 param(
     [Parameter(Mandatory = $true)]
