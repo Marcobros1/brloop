@@ -71,6 +71,26 @@ static int wait_state(PlayerState want, DWORD timeout_ms)
     return player_get_state(g_test->player).state == want;
 }
 
+/* Pump until `cond` is true or the timeout expires. Returns the final value
+ * of `cond`, so a timeout is a failed check, not a hang. Replaces fixed
+ * pump/Sleep waits that gate an asynchronous state transition. */
+static int wait_until(int (*cond)(void), DWORD timeout_ms)
+{
+    DWORD deadline = GetTickCount() + timeout_ms;
+    do {
+        if (cond())
+            return 1;
+        pump(10);
+    } while (GetTickCount() < deadline);
+    return cond();
+}
+
+/* Forward declarations: predicates defined below but used earlier in the
+ * scripted phases. */
+static int track0_open(void);
+static int track1_open(void);
+static int prev_wrap(void);
+
 /* Simulate a button click by sending the exact WM_COMMAND the control
  * itself would send - the selftest therefore exercises the same
  * on_command() path as a real click, not a private test entry point. */
@@ -158,10 +178,45 @@ static void st_phase_library(void)
     /* Select first track (same handler as a click). */
     ListView_SetItemState((*g_test->controls).list, 0, LVIS_SELECTED | LVIS_FOCUSED,
                           LVIS_SELECTED | LVIS_FOCUSED);
-    pump(50);
+    wait_until(track0_open, 2000);
     st_check((*g_test->selected) == 0 && (*g_test->snapshot).sample_rate > 0,
              "selection opens track and fills metadata");
 }
+
+/* Predicates for wait_until: each reads the borrowed selftest state and is
+ * true once the asynchronous UI action it gates has completed. */
+static int track0_open(void)
+{
+    return *g_test->selected == 0 && (*g_test->snapshot).sample_rate > 0;
+}
+
+static int track1_open(void)
+{
+    return *g_test->selected == 1 && (*g_test->snapshot).sample_rate > 0;
+}
+
+static int track_selected(int idx)
+{
+    return *g_test->selected == idx;
+}
+
+static int library_count_is(int count)
+{
+    return *g_test->row_count == count;
+}
+
+static int library_at_least(int count)
+{
+    return *g_test->row_count >= count;
+}
+
+static int active_mode_is_2(void)  { return g_active_mode == 2; }
+static int active_mode_is_0(void)  { return g_active_mode == 0; }
+static int theme_light(void)       { return g_theme_choice == THEME_LIGHT; }
+static int theme_dark(void)        { return g_theme_choice == THEME_DARK; }
+static int theme_system(void)      { return g_theme_choice == THEME_SYSTEM; }
+static int lang_en(void)           { return strings_language() == STR_LANG_EN; }
+static int lang_es(void)           { return strings_language() == STR_LANG_ES; }
 
 /* Phase 1b - modes and theme: the mode bar (Biblioteca / Ajustes) and the
  * theme selector (Claro / Oscuro / Sistema) change through the same
@@ -173,7 +228,7 @@ static void st_phase_modes_theme(void)
 
     /* Switch to Settings: the central block (library) is hidden. */
     send_cmd(IDC_BTN_MODE_SETTINGS);
-    pump(50);
+    wait_until(active_mode_is_2, 2000);
     st_check(g_active_mode == 2, "modo Ajustes activado");
     st_check((GetWindowLongPtrW((*g_test->controls).groupLib, GWL_STYLE) & WS_VISIBLE) == 0,
              "grupo Biblioteca oculto en modo Ajustes");
@@ -183,28 +238,28 @@ static void st_phase_modes_theme(void)
     /* Theme and language from the buttons in the Settings panel (Q-121, Q-122).
      * The Settings controls are only visible in this mode. */
     send_cmd(IDC_BTN_THEME_LIGHT);
-    pump(50);
+    wait_until(theme_light, 2000);
     st_check(g_theme_choice == THEME_LIGHT, "tema claro seleccionado");
 
     send_cmd(IDC_BTN_THEME_DARK);
-    pump(50);
+    wait_until(theme_dark, 2000);
     st_check(g_theme_choice == THEME_DARK, "tema oscuro seleccionado");
 
     send_cmd(IDC_BTN_THEME_SYSTEM);
-    pump(50);
-    st_check(g_theme_choice == THEME_SYSTEM, "tema vuelve al sistema");
+    wait_until(theme_system, 2000);
+    st_check(g_theme_choice == THEME_SYSTEM, "theme returns to system");
 
     send_cmd(IDC_BTN_LANG_EN);
-    pump(50);
+    wait_until(lang_en, 2000);
     st_check(strings_language() == STR_LANG_EN, "idioma English seleccionado");
 
     send_cmd(IDC_BTN_LANG_ES);
-    pump(50);
+    wait_until(lang_es, 2000);
     st_check(strings_language() == STR_LANG_ES, "idioma Espanol seleccionado");
 
     /* Back to Library: the central block reappears. */
     send_cmd(IDC_BTN_MODE_LIBRARY);
-    pump(50);
+    wait_until(active_mode_is_0, 2000);
     st_check(g_active_mode == 0, "modo Biblioteca restaurado");
     st_check((GetWindowLongPtrW((*g_test->controls).groupLib, GWL_STYLE) & WS_VISIBLE) != 0,
              "grupo Biblioteca visible en modo Biblioteca");
@@ -295,7 +350,7 @@ static void st_phase_library_crud(void)
     wchar_t err[1024];
 
     if (before < 2) {
-        st_check(0, "se necesitan al menos 2 pistas sintéticas para CRUD");
+        st_check(0, "at least 2 synthetic tracks are needed for CRUD");
         return;
     }
 
@@ -304,15 +359,15 @@ static void st_phase_library_crud(void)
     {
         int rows = ListView_GetItemCount((*g_test->controls).list);
         st_check(rows == before && rows >= 2,
-                 "list_insert_row insertó la fila de cada pista añadida");
+                 "list_insert_row inserts a row for each added track");
     }
 
     /* Select the second track (same handler as a click on the list). */
     ListView_SetItemState((*g_test->controls).list, 1, LVIS_SELECTED | LVIS_FOCUSED,
                           LVIS_SELECTED | LVIS_FOCUSED);
-    pump(50);
+    wait_until(track1_open, 2000);
     st_check((*g_test->selected) == 1 && (*g_test->snapshot).sample_rate > 0,
-             "seleccionar la segunda pista la abre y rellena metadatos");
+             "selecting the second track opens it and fills the metadata");
 
     /* Adding a track already in the list must be refused and must not grow it. */
     {
@@ -320,7 +375,7 @@ static void st_phase_library_crud(void)
         int rc = g_test->add_track(g_test->add_track_context,
                                    g_test->library->rows[0].path, err, 1024);
         st_check(rc != 0 && (*g_test->row_count) == before2,
-                 "añadir una pista duplicada es rechazado");
+                 "adding a duplicate track is rejected");
     }
 
     /* Remove the selected track and add it back. */
@@ -331,17 +386,24 @@ static void st_phase_library_crud(void)
         if (removedPathCopy) {
             memcpy(removedPathCopy, removedPath, removedPathLen * sizeof(wchar_t));
             send_cmd(IDC_BTN_REMOVE);
-            pump(100);
-            st_check((*g_test->row_count) == before - 1,
-                     "quitar la pista seleccionada reduce la biblioteca");
+            /* Wait until the library shrinks (bounded). */
+            {
+                DWORD tstart = GetTickCount();
+                int shrank = 0;
+                while (GetTickCount() - tstart < 4000) {
+                    if (*g_test->row_count == before - 1) { shrank = 1; break; }
+                    pump(10);
+                }
+                st_check(shrank, "removing the selected track shrinks the library");
+            }
             /* Re-add the removed track. */
             int rc = g_test->add_track(g_test->add_track_context,
                                        removedPathCopy, err, 1024);
             st_check(rc == 0 && (*g_test->row_count) == before,
-                     "re-añadir la pista quitada la recupera");
+                     "re-adding the removed track restores it");
             free(removedPathCopy);
         } else {
-            st_check(0, "no se pudo reservar memoria para la prueba de re-add");
+            st_check(0, "could not allocate memory for the re-add test");
         }
     }
 
@@ -350,10 +412,10 @@ static void st_phase_library_crud(void)
      * phase_library does at startup. */
     ListView_SetItemState((*g_test->controls).list, 0, LVIS_SELECTED | LVIS_FOCUSED,
                           LVIS_SELECTED | LVIS_FOCUSED);
-    pump(50);
+    wait_until(track0_open, 2000);
     st_check((*g_test->selected) == 0
                  && (*g_test->snapshot).sample_rate > 0,
-             "primera pista seleccionada y abierta tras el CRUD");
+             "first track selected and opened after CRUD");
 }
 
 /* Phase 1d - "Anterior" (previous) from the first row at the start of the song:
@@ -364,12 +426,12 @@ static void st_phase_library_crud(void)
 static void st_phase_previous_wrap(void)
 {
     st_check((*g_test->selected) == 0 && (*g_test->snapshot).sample_rate > 0,
-             "partiendo de la primera fila al inicio de la canción");
+             "starting from the first row at the start of the song");
     send_cmd(IDC_BTN_PREVIOUS);
-    pump(200);
+    wait_until(prev_wrap, 2000);
     st_check((*g_test->selected) == (*g_test->row_count) - 1
                  && (*g_test->snapshot).sample_rate > 0,
-             "anterior desde la primera fila envuelve al último registro");
+             "previous from the first row wraps to the last row");
 
     /* Back to the first track (stereo, stopped) so the transport phases start
      * from the base state they expect. The list allows multiple selection (no
@@ -380,9 +442,19 @@ static void st_phase_previous_wrap(void)
     ListView_SetItemState((*g_test->controls).list, 1, 0, LVIS_SELECTED);
     ListView_SetItemState((*g_test->controls).list, 0, LVIS_SELECTED | LVIS_FOCUSED,
                           LVIS_SELECTED | LVIS_FOCUSED);
-    pump(50);
+    wait_until(track0_open, 2000);
     st_check((*g_test->selected) == 0 && (*g_test->snapshot).sample_rate > 0,
-             "vuelve a la primera pista antes del transporte");
+             "returns to the first track before transport");
+}
+
+/* Predicates used by wait_until across the transport phases. */
+static int playing(void) { return player_get_state(g_test->player).state == PLAYER_PLAYING; }
+static int paused(void)  { return player_get_state(g_test->player).state == PLAYER_PAUSED; }
+static int stopped(void) { return player_get_state(g_test->player).state == PLAYER_STOPPED; }
+static int prev_wrap(void)
+{
+    return *g_test->selected == (*g_test->row_count) - 1
+        && (*g_test->snapshot).sample_rate > 0;
 }
 
 /* Phase 1e - library error paths without audio: a file that disappears after
@@ -429,7 +501,15 @@ static void st_phase_library_errors(void)
      * the same message the app builds for this row, in the active language. */
     ListView_SetItemState((*g_test->controls).list, before, LVIS_SELECTED | LVIS_FOCUSED,
                           LVIS_SELECTED | LVIS_FOCUSED);
-    pump(100);
+    /* Wait until the selection lands on the vanished-file row (bounded). */
+    {
+        DWORD tstart = GetTickCount();
+        while (GetTickCount() - tstart < 4000) {
+            if (*g_test->selected == before)
+                break;
+            pump(10);
+        }
+    }
     SendMessageW((*g_test->controls).status, SB_GETTEXTW, 0, (LPARAM)bar);
     {
         /* The bar must start with the app's own message for this row, the
@@ -448,12 +528,20 @@ static void st_phase_library_errors(void)
      * drop the copy, then clear the selection before picking row 0 again, so
      * the change is seen as a new selection (same as previous_wrap does). */
     send_cmd(IDC_BTN_REMOVE);
-    pump(100);
+    /* Wait until the library is back to its original count (bounded). */
+    {
+        DWORD tstart = GetTickCount();
+        int restored = 0;
+        while (GetTickCount() - tstart < 4000) {
+            if (*g_test->row_count == before) { restored = 1; break; }
+            pump(10);
+        }
+        st_check(restored, "the library returns to its initial state after CRUD");
+    }
     ListView_SetItemState((*g_test->controls).list, -1, 0, LVIS_SELECTED);
-    pump(20);
     ListView_SetItemState((*g_test->controls).list, 0, LVIS_SELECTED | LVIS_FOCUSED,
                           LVIS_SELECTED | LVIS_FOCUSED);
-    pump(50);
+    wait_until(track0_open, 2000);
 }
 
 /* Phase 2 - transport: play reaches PLAYING with the device open, the API
@@ -503,10 +591,21 @@ static void st_phase_transport(void)
     send_cmd(IDC_BTN_PLAY);
     st_check(wait_state(PLAYER_PAUSED, 2000), "pause reaches PAUSED");
     {
-        uint64_t p0 = player_get_state(g_test->player).position;
-        pump(300);
-        uint64_t p1 = player_get_state(g_test->player).position;
-        st_check(p0 == p1, "position frozen while paused");
+        /* Position must not advance while paused: wait until two reads
+         * agree (bounded timeout; a timeout fails the check). */
+        {
+            DWORD tstart = GetTickCount();
+            uint64_t p0 = player_get_state(g_test->player).position;
+            uint64_t p1 = p0;
+            int stable = 0;
+            while (GetTickCount() - tstart < 2000) {
+                pump(10);
+                p1 = player_get_state(g_test->player).position;
+                if (p1 == p0) { stable = 1; break; }
+                p0 = p1;
+            }
+            st_check(stable && p0 == p1, "position frozen while paused");
+        }
         {
             PlayerSnapshot s = player_get_state(g_test->player);
             TransportLogicalState ls = transport_logical_state(s.state,
@@ -536,39 +635,83 @@ static void st_phase_seek_speed(void)
         x = (rc.right - rc.left) * 3 / 4;
         SendMessageW((*g_test->controls).progress, WM_LBUTTONDOWN, 0, MAKELPARAM(x, 8));
         SendMessageW((*g_test->controls).progress, WM_LBUTTONUP, 0, MAKELPARAM(x, 8));
-        pump(100);
+        /* Wait until the seek lands in the 55..80 % window (bounded). */
+        {
+            DWORD tstart = GetTickCount();
+            int in_range = 0;
+            while (GetTickCount() - tstart < 2000) {
+                PlayerSnapshot q = player_get_state(g_test->player);
+                if (q.position > q.total_samples * 55 / 100
+                    && q.position < q.total_samples * 80 / 100) {
+                    in_range = 1;
+                    break;
+                }
+                pump(10);
+            }
+            st_check(in_range, "click on the progress bar seeks near that point");
+        }
         s1 = player_get_state(g_test->player);
-        st_check(s1.position > s1.total_samples * 55 / 100
-                 && s1.position < s1.total_samples * 80 / 100,
-                 "click on the progress bar seeks near that point");
-        pump(900);
+        /* Wait until playback advances past the seeked point (bounded). */
+        {
+            DWORD tstart = GetTickCount();
+            int advanced = 0;
+            while (GetTickCount() - tstart < 4000) {
+                PlayerSnapshot q = player_get_state(g_test->player);
+                if (q.state == PLAYER_PLAYING && q.position > s1.position) {
+                    advanced = 1;
+                    break;
+                }
+                pump(10);
+            }
+            st_check(advanced, "playback continues from the seeked position");
+        }
         s2 = player_get_state(g_test->player);
-        st_check(s2.state == PLAYER_PLAYING && s2.position > s1.position,
-                 "playback continues from the seeked position");
     }
 
     /* Speed toggle: 1.0x -> Final Lap -> 1.0x; the button caption always
      * announces the mode in force (single toggle, no pair of buttons). */
     send_cmd(IDC_BTN_SPEED);
-    pump(500);
+    /* Wait until the device rate matches the FLSM conversion (bounded). */
+    {
+        DWORD tstart = GetTickCount();
+        int flsm = 0;
+        while (GetTickCount() - tstart < 4000) {
+            PlayerSnapshot s = player_get_state(g_test->player);
+            uint32_t want = player_device_rate(s.sample_rate,
+                                               PLAYER_FLSM_SPEED_PPM);
+            if (s.state == PLAYER_PLAYING && s.device_rate == want) {
+                flsm = 1;
+                break;
+            }
+            pump(10);
+        }
+        st_check(flsm, "FLSM speed applied live, device rate matches floor(rate*k)");
+    }
     {
         PlayerSnapshot s = player_get_state(g_test->player);
-        uint32_t want = player_device_rate(s.sample_rate,
-                                           PLAYER_FLSM_SPEED_PPM);
         TransportLogicalState ls = transport_logical_state(s.state,
             s.speed_ppm == PLAYER_FLSM_SPEED_PPM, s.pair_sel, s.pair_count);
-        st_check(s.state == PLAYER_PLAYING && s.device_rate == want,
-                 "FLSM speed applied live, device rate matches floor(rate*k)");
         st_check(ls.speed_flsm, "speed state reports Final Lap");
     }
     send_cmd(IDC_BTN_SPEED);
-    pump(500);
+    /* Wait until the device rate returns to the file rate (bounded). */
+    {
+        DWORD tstart = GetTickCount();
+        int restored = 0;
+        while (GetTickCount() - tstart < 4000) {
+            PlayerSnapshot s = player_get_state(g_test->player);
+            if (s.state == PLAYER_PLAYING && s.device_rate == s.sample_rate) {
+                restored = 1;
+                break;
+            }
+            pump(10);
+        }
+        st_check(restored, "second press restores the 1.0x device rate");
+    }
     {
         PlayerSnapshot s = player_get_state(g_test->player);
         TransportLogicalState ls = transport_logical_state(s.state,
             s.speed_ppm == PLAYER_FLSM_SPEED_PPM, s.pair_sel, s.pair_count);
-        st_check(s.state == PLAYER_PLAYING && s.device_rate == s.sample_rate,
-                 "second press restores the 1.0x device rate");
         st_check(!ls.speed_flsm && s.speed_ppm == PLAYER_SPEED_SCALE,
                  "speed state reports 1.0x again");
     }
@@ -578,11 +721,21 @@ static void st_phase_seek_speed(void)
     {
         int rowBefore = (*g_test->selected);
         send_cmd(IDC_BTN_PREVIOUS);
-        pump(200);
-        PlayerSnapshot s = player_get_state(g_test->player);
-        st_check(s.state == PLAYER_PLAYING && s.position < s.sample_rate
-                 && (*g_test->selected) == rowBefore,
-                 "restarts the song when far into it");
+        /* Wait until Anterior restarts the current track (bounded). */
+        {
+            DWORD tstart = GetTickCount();
+            int restarted = 0;
+            while (GetTickCount() - tstart < 4000) {
+                PlayerSnapshot s = player_get_state(g_test->player);
+                if (s.state == PLAYER_PLAYING && s.position < s.sample_rate
+                    && (*g_test->selected) == rowBefore) {
+                    restarted = 1;
+                    break;
+                }
+                pump(10);
+            }
+            st_check(restarted, "restarts the song when far into it");
+        }
     }
 
     /* Loop toggle (only if the file has loop metadata). */
@@ -602,13 +755,31 @@ static void st_phase_seek_speed(void)
             SendMessageW((*g_test->controls).checkLoop, BM_SETCHECK,
                          boxBefore ? BST_UNCHECKED : BST_CHECKED, 0);
             send_cmd(IDC_CHECK_LOOP);
-            pump(50);
-            s = player_get_state(g_test->player);
-            st_check(s.loop_enabled != before, "loop toggle flips the flag");
+            /* Wait until the loop flag flips (bounded). */
+            {
+                DWORD tstart = GetTickCount();
+                int flipped = 0;
+                while (GetTickCount() - tstart < 4000) {
+                    PlayerSnapshot q = player_get_state(g_test->player);
+                    if (q.loop_enabled != before) { flipped = 1; break; }
+                    pump(10);
+                }
+                st_check(flipped, "loop toggle flips the flag");
+            }
             SendMessageW((*g_test->controls).checkLoop, BM_SETCHECK,
                          boxBefore ? BST_CHECKED : BST_UNCHECKED, 0);
             send_cmd(IDC_CHECK_LOOP);
-            pump(50);
+            /* Wait until the loop flag flips back (bounded). */
+            {
+                DWORD tstart = GetTickCount();
+                int flipped_back = 0;
+                while (GetTickCount() - tstart < 4000) {
+                    PlayerSnapshot q = player_get_state(g_test->player);
+                    if (q.loop_enabled == before) { flipped_back = 1; break; }
+                    pump(10);
+                }
+                st_check(flipped_back, "loop toggle flips the flag back");
+            }
         } else {
             st_check(1, "no-loop file: loop control left disabled");
         }
@@ -674,10 +845,10 @@ static void st_phase_language(void)
 
 
     send_cmd(IDC_BTN_MODE_SETTINGS);
-    pump(50);
+    wait_until(active_mode_is_2, 2000);
 
     send_cmd(IDC_BTN_LANG_EN);
-    pump(100);
+    wait_until(lang_en, 2000);
     {
         PlayerSnapshot s = player_get_state(g_test->player);
         const wchar_t *expected = s.state == PLAYER_PLAYING ? L"Pause"
@@ -695,7 +866,7 @@ static void st_phase_language(void)
     st_check(strings_language() == STR_LANG_EN, "English is the active language");
 
     send_cmd(IDC_BTN_LANG_ES);
-    pump(100);
+    wait_until(lang_es, 2000);
     GetWindowTextW((*g_test->controls).btnPrevious, cap, 64);
     st_check(wcscmp(cap, L"Anterior") == 0, "Español relabels Previous");
     GetWindowTextW((*g_test->controls).groupLib, cap, 64);
@@ -708,12 +879,12 @@ static void st_phase_language(void)
         st_check(wcscmp(cell, g_test->library->rows[0].loop ? L"Sí" : L"No") == 0,
                  "loop column shows Sí after switching to Español");
         send_cmd(IDC_BTN_LANG_EN);
-        pump(50);
+        wait_until(lang_en, 2000);
         ListView_GetItemText((*g_test->controls).list, 0, 4, cell, 32);
         st_check(wcscmp(cell, g_test->library->rows[0].loop ? L"Yes" : L"No") == 0,
                  "loop column shows Yes after switching back to English");
         send_cmd(IDC_BTN_LANG_ES);
-        pump(50);
+        wait_until(lang_es, 2000);
     }
 
     /* Leave the session in the language it started in, then return to
@@ -722,9 +893,16 @@ static void st_phase_language(void)
         send_cmd(IDC_BTN_LANG_EN);
     else
         send_cmd(IDC_BTN_LANG_ES);
-    pump(50);
+    {
+        DWORD tstart = GetTickCount();
+        while (GetTickCount() - tstart < 2000) {
+            if (strings_language() == before)
+                break;
+            pump(10);
+        }
+    }
     send_cmd(IDC_BTN_MODE_LIBRARY);
-    pump(50);
+    wait_until(active_mode_is_0, 2000);
 }
 
 /* Phase 5 - removal: removing the selected row must select the replacement
@@ -745,9 +923,16 @@ static void st_phase_remove(void)
      * place: the next one, or the previous one when it was the last. */
     expected_replacement = removed < before - 1 ? removed : before - 2;
     send_cmd(IDC_BTN_REMOVE);
-    pump(100);
-    st_check((*g_test->row_count) == before - 1,
-             "removing the selected row shrinks the library");
+    /* Wait until the library shrinks and the replacement row opens (bounded). */
+    {
+        DWORD tstart = GetTickCount();
+        int removed_ok = 0;
+        while (GetTickCount() - tstart < 4000) {
+            if (*g_test->row_count == before - 1) { removed_ok = 1; break; }
+            pump(10);
+        }
+        st_check(removed_ok, "removing the selected row shrinks the library");
+    }
     st_check((*g_test->selected) == expected_replacement
              && (*g_test->snapshot).sample_rate > 0,
              "the replacement row is selected and opened");
@@ -761,15 +946,23 @@ static void st_phase_remove(void)
 static void st_phase_clear(void)
 {
     send_cmd(IDC_BTN_CLEAR);
-    pump(50);
-    st_check((*g_test->row_count) == 0, "limpiar vacía la biblioteca");
+    /* Wait until the library is empty (bounded). */
+    {
+        DWORD tstart = GetTickCount();
+        int empty = 0;
+        while (GetTickCount() - tstart < 4000) {
+            if (*g_test->row_count == 0) { empty = 1; break; }
+            pump(10);
+        }
+        st_check(empty, "clear empties the library");
+    }
     st_check(IsWindowEnabled((*g_test->controls).btnPlay) == 0,
-             "reproducir deshabilitado sin pista seleccionada");
+             "play is disabled with no track selected");
     {
         wchar_t bar[64] = L"";
         SendMessageW((*g_test->controls).status, SB_GETTEXTW, 0, (LPARAM)bar);
         st_check(wcscmp(bar, tr(STR_LIST_EMPTY)) == 0,
-                 "el estado informa de la lista vacía");
+                 "the state reports the empty list");
     }
 }
 
@@ -972,9 +1165,33 @@ static void st_transport_round(void)
         x = (rc.right - rc.left) * 3 / 4;
         SendMessageW((*g_test->controls).progress, WM_LBUTTONDOWN, 0, MAKELPARAM(x, 8));
         SendMessageW((*g_test->controls).progress, WM_LBUTTONUP, 0, MAKELPARAM(x, 8));
-        pump(50);
+        /* Wait until the seek lands past the 3 s threshold so "Anterior"
+         * restarts instead of switching row (bounded). */
+        {
+            DWORD tstart = GetTickCount();
+            int far_in = 0;
+            while (GetTickCount() - tstart < 4000) {
+                PlayerSnapshot q = player_get_state(g_test->player);
+                if (q.position > q.sample_rate * 3u) { far_in = 1; break; }
+                pump(10);
+            }
+            st_check(far_in, "seek lands past the 3 s threshold");
+        }
         send_cmd(IDC_BTN_PREVIOUS);
-        pump(50);
+        /* Wait until Anterior restarts the current track (bounded). */
+        {
+            DWORD tstart = GetTickCount();
+            int restarted = 0;
+            while (GetTickCount() - tstart < 4000) {
+                PlayerSnapshot q = player_get_state(g_test->player);
+                if (q.state == PLAYER_PLAYING && q.position < q.sample_rate) {
+                    restarted = 1;
+                    break;
+                }
+                pump(10);
+            }
+            st_check(restarted, "Anterior restarts the current track");
+        }
         send_cmd(IDC_BTN_PLAY); /* pause */
         wait_state(PLAYER_PAUSED, 2000);
     }
@@ -982,7 +1199,6 @@ static void st_transport_round(void)
                           LVIS_SELECTED | LVIS_FOCUSED,
                           LVIS_SELECTED | LVIS_FOCUSED);
     wait_state(PLAYER_STOPPED, 2000);
-    pump(100);
 }
 
 /* Scripted end-to-end session: every phase asserts the behaviour a user
@@ -1085,7 +1301,12 @@ static int run_selftest(void)
             }
         }
     }
-    pump(100);
+    /* Wait until the window is gone so the handle count is stable (bounded). */
+    {
+        DWORD tstart = GetTickCount();
+        while (GetTickCount() - tstart < 2000 && IsWindow(g_test->window))
+            pump(10);
+    }
     GetProcessHandleCount(GetCurrentProcess(), &handles2);
     st_logf("handles after window close: %lu (base %lu)\n",
             (unsigned long)handles2, (unsigned long)g_test->baseline_handles);

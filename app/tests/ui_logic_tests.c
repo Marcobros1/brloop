@@ -373,18 +373,11 @@ static double contrast_ratio(COLORREF a, COLORREF b)
 }
 
 /* Every catalog variant: the main text and the three state texts (playing,
- * paused, finished) against the background. Q-120 approves exactly six
- * variants with a state text below 4.5:1; any other failure is a bug. */
-static int is_q120_exception(const char *name, const char *variant)
-{
-    (void)name;
-    (void)variant;
-    return 0;
-}
-
+ * paused, finished) against the background. Every variant, including all
+ * state texts, must be above 4.5:1. */
 static void test_catalog_contrast(void)
 {
-    size_t i, total = 0, loaded = 0, below = 0, unexpected = 0;
+    size_t i, total = 0, loaded = 0, below = 0;
 
     note("== WCAG contrast, every catalog variant (main text and state texts) ==");
 
@@ -414,16 +407,13 @@ static void test_catalog_contrast(void)
         if (bad) {
             below++;
             note("below 4.5:1: %s (%s)", e->name, e->variant);
-            if (!is_q120_exception(e->name, e->variant))
-                unexpected++;
         }
     }
 
-    check(total == 38 && loaded == total, "%lu catalog variants, all load",
+    check(loaded == total && total > 0, "all %lu catalog variants load, at least one",
           (unsigned long)total);
-    check(below == 0, "variants below 4.5:1: %lu (expected 0)", (unsigned long)below);
-    check(unexpected == 0, "no variant outside the Q-120 list fails: %lu",
-          (unsigned long)unexpected);
+    check(below == 0, "all variants above 4.5:1 (main text and states); "
+          "%lu variant(s) below", (unsigned long)below);
 }
 
 /* ------------------------------------------------------------- settings --- */

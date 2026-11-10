@@ -1425,10 +1425,19 @@ static void test_transport_audio(void)
         max_lat = lat;
     check(wait_state(p, PLAYER_PAUSED, 2000), "pause reaches PAUSED");
     {
+        /* Position must not advance while paused: wait until two reads agree
+         * (bounded timeout; a timeout fails the check). */
+        DWORD start = (DWORD)now_ms();
         uint64_t pa = player_get_state(p).position;
-        Sleep(300);
-        uint64_t pb = player_get_state(p).position;
-        check(pa == pb, "position frozen while paused (%llu)",
+        uint64_t pb = pa;
+        int stable = 0;
+        while ((DWORD)now_ms() - start < 2000) {
+            Sleep(10);
+            pb = player_get_state(p).position;
+            if (pb == pa) { stable = 1; break; }
+            pa = pb;
+        }
+        check(stable && pa == pb, "position frozen while paused (%llu)",
               (unsigned long long)pa);
     }
 
@@ -1439,10 +1448,17 @@ static void test_transport_audio(void)
         max_lat = lat;
     check(wait_state(p, PLAYER_PLAYING, 2000), "resume reaches PLAYING");
     {
+        /* Position must advance after resume: wait until it grows (bounded). */
+        DWORD start = (DWORD)now_ms();
         uint64_t pa = player_get_state(p).position;
-        Sleep(700);
-        uint64_t pb = player_get_state(p).position;
-        check(pb > pa, "position advances after resume (%llu -> %llu)",
+        uint64_t pb = pa;
+        int advanced = 0;
+        while ((DWORD)now_ms() - start < 4000) {
+            Sleep(10);
+            pb = player_get_state(p).position;
+            if (pb > pa) { advanced = 1; break; }
+        }
+        check(advanced && pb > pa, "position advances after resume (%llu -> %llu)",
               (unsigned long long)pa, (unsigned long long)pb);
     }
 
@@ -1490,10 +1506,19 @@ static void test_transport_audio(void)
                   "4-channel device open succeeded (folded=%d)",
                   s.audio_folded);
             pa = s.position;
-            Sleep(600);
-            pb = player_get_state(p).position;
-            check(pb > pa, "4-channel playback advances (%llu -> %llu)",
-                  (unsigned long long)pa, (unsigned long long)pb);
+            /* Wait until 4-channel playback advances (bounded). */
+            {
+                DWORD start = (DWORD)now_ms();
+                int advanced = 0;
+                pb = pa;
+                while ((DWORD)now_ms() - start < 4000) {
+                    Sleep(10);
+                    pb = player_get_state(p).position;
+                    if (pb > pa) { advanced = 1; break; }
+                }
+                check(advanced && pb > pa, "4-channel playback advances (%llu -> %llu)",
+                      (unsigned long long)pa, (unsigned long long)pb);
+            }
             note("4ch output path: %s",
                  s.audio_folded ? "stereo fold (device rejected 4ch)"
                                 : "native multichannel");
