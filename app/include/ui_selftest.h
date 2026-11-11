@@ -7,6 +7,7 @@
 
 #include "player.h"
 #include "ui_types.h"
+#include "wait.h"
 
 /* The selftest uses the same library-loading path as a user action. The path
  * is borrowed for the callback duration; implementations copy it if needed. */
