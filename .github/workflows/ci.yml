@@ -305,7 +305,7 @@ jobs:
           restore-keys: ${{ runner.os }}-sonar
 
       - name: SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@4d1dc0c91ee400dcf8a6dddf2f705ac36542e304 # v8.4.0
+        uses: SonarSource/sonarqube-scan-action@ccbd9662a0970c9586c3ca942524834730e676d0 # v8.4.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
