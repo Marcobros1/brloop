@@ -117,7 +117,7 @@ jobs:
               & $rc @('/nologo', '/fo', 'brloop.res', "$root\app\src\brloop.rc")
               if ($LASTEXITCODE -ne 0) { throw "rc.exe failed ($LASTEXITCODE)" }
               # Build the argument array first: a nested @(...) inside the call would be flattened.
-              $clArgs = @('/nologo', '/W4', '/WX', '/O2', '/Zi', '/utf-8', '/D_CRT_SECURE_NO_WARNINGS', '/DUNICODE', '/D_UNICODE',
+              $clArgs = @('/nologo', '/W4', '/WX', '/Od', '/Zi', '/utf-8', '/D_CRT_SECURE_NO_WARNINGS', '/DUNICODE', '/D_UNICODE',
                   "/I$root\core\include", "/I$root\app\include") + $srcFiles + @('brloop.res',
                   '/Fe:brloop.exe', '/Fd:brloop.pdb',
                   '/link', 'user32.lib', 'gdi32.lib', 'shell32.lib', 'winmm.lib', 'comctl32.lib', 'comdlg32.lib', 'psapi.lib', 'uxtheme.lib', 'advapi32.lib')
