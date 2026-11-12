@@ -878,6 +878,23 @@ static void set_language(StrLanguage lang)
     update_ui();
 }
 
+/* Devuelve un rect centrado dentro de `rc` escalado al 96 %. Se usa para
+ * pintar los botones de transporte y velocidad "encogidos" mientras se
+ * mantienen pulsados. El rect original (zona clicable) no cambia. */
+static RECT shrink_rect(const RECT *rc, int pct)
+{
+    RECT s = *rc;
+    int w = rc->right - rc->left;
+    int h = rc->bottom - rc->top;
+    int nw = w * pct / 100;
+    int nh = h * pct / 100;
+    s.left = rc->left + (w - nw) / 2;
+    s.right = s.left + nw;
+    s.top = rc->top + (h - nh) / 2;
+    s.bottom = s.top + nh;
+    return s;
+}
+
 /* Returns black or white text, whichever has the higher WCAG contrast
  * ratio against `bg`. Luminance uses linearized sRGB channels. */
 static COLORREF pick_text_on(COLORREF bg)
@@ -994,14 +1011,34 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             wchar_t text[64];
             COLORREF text_fg = (dis->itemState & ODS_DISABLED)
                 ? GetSysColor(COLOR_GRAYTEXT) : pick_text_on(UI_C_SUPERFICIE);
-            HBRUSH text_bg = CreateSolidBrush(UI_C_SUPERFICIE);
+            RECT text_box = dis->rcItem;
+            int pressed = dis->itemState & ODS_SELECTED;
+            /* Velocidad se encoge entero (94 %: fondo, borde y texto) mientras
+             * está pulsada. Su rect y zona clicable no cambian. */
+            if (dis->CtlID == IDC_BTN_SPEED && pressed) {
+                RECT face_rect = shrink_rect(&dis->rcItem, 94);
+                FillRect(dis->hDC, &dis->rcItem, g_brushBg);
+                FillRect(dis->hDC, &face_rect, g_brushFace);
+                HPEN pen = CreatePen(PS_SOLID, 1, UI_C_BORDE);
+                HPEN old_pen = (HPEN)SelectObject(dis->hDC, pen);
+                HBRUSH old_brush = (HBRUSH)SelectObject(dis->hDC,
+                    GetStockObject(NULL_BRUSH));
+                Rectangle(dis->hDC, face_rect.left, face_rect.top,
+                          face_rect.right, face_rect.bottom);
+                SelectObject(dis->hDC, old_brush);
+                SelectObject(dis->hDC, old_pen);
+                DeleteObject(pen);
+                text_box = face_rect;
+            } else {
+                HBRUSH text_bg = CreateSolidBrush(UI_C_SUPERFICIE);
+                FillRect(dis->hDC, &dis->rcItem, text_bg);
+                DeleteObject(text_bg);
+            }
             GetWindowTextW(dis->hwndItem, text, 64);
-            FillRect(dis->hDC, &dis->rcItem, text_bg);
-            DeleteObject(text_bg);
             SetBkMode(dis->hDC, TRANSPARENT);
             SetTextColor(dis->hDC, text_fg);
             SelectObject(dis->hDC, g_font);
-            DrawTextW(dis->hDC, text, -1, &dis->rcItem,
+            DrawTextW(dis->hDC, text, -1, &text_box,
                       DT_CENTER | DT_VCENTER | DT_SINGLELINE);
             if (dis->itemState & ODS_FOCUS) {
                 RECT focus = dis->rcItem;
@@ -1064,9 +1101,29 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             fg = UI_C_ACENTO;
         bg = UI_C_SUPERFICIE;
         face = CreateSolidBrush(bg);
-        FillRect(dis->hDC, &dis->rcItem, face);
+        int pressed = dis->itemState & ODS_SELECTED;
+        RECT icon_box = dis->rcItem;
+        /* Anterior, Play y Siguiente se encogen enteros (94 %: fondo, borde
+         * e icono) mientras están pulsados; su rect y zona clicable no cambian. */
+        if (pressed) {
+            RECT face_rect = shrink_rect(&dis->rcItem, 94);
+            FillRect(dis->hDC, &dis->rcItem, g_brushBg);
+            FillRect(dis->hDC, &face_rect, face);
+            HPEN pen = CreatePen(PS_SOLID, 1, UI_C_BORDE);
+            HPEN old_pen = (HPEN)SelectObject(dis->hDC, pen);
+            HBRUSH old_brush = (HBRUSH)SelectObject(dis->hDC,
+                GetStockObject(NULL_BRUSH));
+            Rectangle(dis->hDC, face_rect.left, face_rect.top,
+                      face_rect.right, face_rect.bottom);
+            SelectObject(dis->hDC, old_brush);
+            SelectObject(dis->hDC, old_pen);
+            DeleteObject(pen);
+            icon_box = face_rect;
+        } else {
+            FillRect(dis->hDC, &dis->rcItem, face);
+        }
         DeleteObject(face);
-        icons_draw(dis->hDC, dis->rcItem, kind, fg);
+        icons_draw(dis->hDC, icon_box, kind, fg);
         if (dis->itemState & ODS_FOCUS) {
             RECT focus = dis->rcItem;
             InflateRect(&focus, -3, -3);

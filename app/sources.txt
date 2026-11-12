@@ -9,6 +9,7 @@ app/src/resampler.c
 app/src/strings.c
 app/src/settings.c
 app/src/wait.c
+app/src/anim.c
 app/src/ui_selftest.c
 app/src/icons.c
 app/src/main.c

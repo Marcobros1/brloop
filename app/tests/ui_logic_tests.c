@@ -19,6 +19,7 @@
 #include <string.h>
 #include <wchar.h>
 
+#include "anim.h"
 #include "library.h"
 #include "palette.h"
 #include "palette_tables.h"
@@ -636,6 +637,80 @@ static void test_settings_write_format(void)
     settings_sandbox_teardown();
 }
 
+/* --------------------------------------------------------------- timing --- */
+
+/* Animation timing: progress 0.0 -> 1.0 over the duration, end at duration,
+ * restart, and inactive when done. The clock is a fixed DWORD passed in, so
+ * each case is exact and does not depend on real time or Sleep. Runs
+ * headless: no window, no audio. */
+static void test_anim_inactive_by_default(void)
+{
+    Anim a = { 0, 0 };
+
+    note("== anim inactive by default ==");
+    check(anim_progress(&a, 1000) == 0.0, "inactive: progress 0.0");
+    check(anim_is_active(&a, 1000) == 0, "inactive: not active");
+}
+
+static void test_anim_starts_at_zero(void)
+{
+    Anim a = { 0, 0 };
+
+    note("== anim starts at zero ==");
+    anim_start(&a, 1000, 200);
+    check(anim_is_active(&a, 1000) == 1, "started: active");
+    check(anim_progress(&a, 1000) == 0.0, "started: progress practically 0");
+}
+
+static void test_anim_reaches_one_at_end(void)
+{
+    Anim a = { 0, 0 };
+
+    note("== anim reaches one at the end of its duration ==");
+    anim_start(&a, 1000, 50);
+    check(anim_progress(&a, 1049) < 1.0, "just before end: progress below 1");
+    check(anim_progress(&a, 1050) == 1.0, "at the end: progress 1.0");
+    check(anim_is_active(&a, 1050) == 0, "at the end: inactive");
+}
+
+static void test_anim_stops(void)
+{
+    Anim a = { 0, 0 };
+
+    note("== anim_stop sets progress back to zero ==");
+    anim_start(&a, 1000, 500);
+    anim_stop(&a);
+    check(anim_progress(&a, 1500) == 0.0, "stopped: progress back to 0.0");
+    check(anim_is_active(&a, 1500) == 0, "stopped: inactive");
+}
+
+static void test_anim_restart_resets_progress(void)
+{
+    Anim a = { 0, 0 };
+
+    note("== restart resets progress ==");
+    anim_start(&a, 1000, 200);
+    check(anim_progress(&a, 1060) > 0.0, "mid-way: progress above 0");
+    anim_start(&a, 1200, 200); /* restart */
+    check(anim_progress(&a, 1205) < 0.05, "after restart: progress near 0");
+    check(anim_progress(&a, 1400) == 1.0, "after second duration: progress 1.0");
+}
+
+static void test_anim_stays_within_range(void)
+{
+    Anim a = { 0, 0 };
+    DWORD now;
+    double p;
+
+    note("== anim stays within [0, 1] ==");
+    anim_start(&a, 1000, 150);
+    for (now = 1000; now <= 1250; now += 20) {
+        p = anim_progress(&a, now);
+        check(p >= 0.0 && p <= 1.0, "progress within [0,1] during animation");
+    }
+    check(anim_progress(&a, 1150) == 1.0, "at the end: progress 1.0");
+}
+
 /* -------------------------------------------------------------------- main --- */
 
 int main(void)
@@ -656,6 +731,13 @@ int main(void)
     test_catalog_contrast();
     test_settings_palette();
     test_settings_write_format();
+
+    test_anim_inactive_by_default();
+    test_anim_starts_at_zero();
+    test_anim_reaches_one_at_end();
+    test_anim_stops();
+    test_anim_restart_resets_progress();
+    test_anim_stays_within_range();
 
     {
         char line[200];
