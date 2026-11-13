@@ -23,7 +23,9 @@
 #include "library.h"
 #include "palette.h"
 #include "palette_tables.h"
+#include "panel_slide.h"
 #include "player.h"
+#include "ui_panels.h"
 #include "settings.h"
 #include "strings.h"
 
@@ -711,6 +713,150 @@ static void test_anim_stays_within_range(void)
     check(anim_progress(&a, 1150) == 1.0, "at the end: progress 1.0");
 }
 
+/* ----------------------------------------------------------- panel slide --- */
+
+/* Panel slide: pure position math. No HWND, no timer. Progress comes from
+ * anim_progress() (0.0..1.0), width is the panel width in pixels. Returns
+ * offset relative to layout's normal X. Old panel: 0 -> -w. New panel: +w -> 0. */
+static void test_slide_old_offset_at_start(void)
+{
+    note("== slide old offset at start (p=0) ==");
+    check(panel_slide_old_offset(0.0, 400) == 0,
+          "p=0.0, width=400: old panel at normal position (0)");
+}
+
+static void test_slide_old_offset_at_end(void)
+{
+    note("== slide old offset at end (p=1) ==");
+    check(panel_slide_old_offset(1.0, 400) == -400,
+          "p=1.0, width=400: old panel fully out to the left (-400)");
+}
+
+static void test_slide_old_offset_mid(void)
+{
+    note("== slide old offset at mid (p=0.5) ==");
+    check(panel_slide_old_offset(0.5, 400) == -200,
+          "p=0.5, width=400: old panel halfway out to the left (-200)");
+}
+
+static void test_slide_old_offset_clamp(void)
+{
+    note("== slide old offset clamps progress to [0, 1] ==");
+    check(panel_slide_old_offset(-0.3, 400) == 0,
+          "p<0: old offset clamped to 0");
+    check(panel_slide_old_offset(1.3, 400) == -400,
+          "p>1: old offset clamped to -width");
+}
+
+/* ----------------------------------------------------------- panel slide --- */
+
+static void test_slide_new_offset_at_start(void)
+{
+    note("== slide new offset at start (p=0) ==");
+    check(panel_slide_new_offset(0.0, 400) == 400,
+          "p=0.0, width=400: new panel fully out to the right (+400)");
+}
+
+static void test_slide_new_offset_at_end(void)
+{
+    note("== slide new offset at end (p=1) ==");
+    check(panel_slide_new_offset(1.0, 400) == 0,
+          "p=1.0, width=400: new panel at normal position (0)");
+}
+
+static void test_slide_new_offset_mid(void)
+{
+    note("== slide new offset at mid (p=0.5) ==");
+    check(panel_slide_new_offset(0.5, 400) == 200,
+          "p=0.5, width=400: new panel halfway in from the right (+200)");
+}
+
+static void test_slide_new_offset_clamp(void)
+{
+    note("== slide new offset clamps progress to [0, 1] ==");
+    check(panel_slide_new_offset(-0.3, 400) == 400,
+          "p<0: new offset clamped to +width");
+    check(panel_slide_new_offset(1.3, 400) == 0,
+          "p>1: new offset clamped to 0");
+}
+
+/* ------------------------------------------------------- panel membership --- */
+
+/* Which controls belong to which mode (set_active_mode in main.c). Pure
+ * table, no HWND: ids come from ui_types.h. Expected sets are read from
+ * set_active_mode, not from ui_panels.c. */
+static void test_panel_membership_disjoint(void)
+{
+    int i, j, shared = 0;
+    int lib_n = panel_ids_count(PANEL_LIBRARY), set_n = panel_ids_count(PANEL_SETTINGS);
+    note("== panel membership: Library and Settings sets are disjoint ==");
+    /* Guard: an empty table would make "disjoint" pass for free. */
+    check(lib_n > 0 && set_n > 0, "both panel tables are non-empty");
+    for (i = 0; i < lib_n; i++)
+        for (j = 0; j < set_n; j++)
+            if (panel_ids_get(PANEL_LIBRARY, i) == panel_ids_get(PANEL_SETTINGS, j))
+                shared++;
+    check(shared == 0, "no control id belongs to both Library and Settings");
+}
+
+static void test_panel_membership_no_duplicates(void)
+{
+    int panel, i, j, dup = 0;
+    note("== panel membership: no duplicate ids inside a panel ==");
+    for (panel = 0; panel < 2; panel++) {
+        int n = panel_ids_count((PanelId)panel);
+        for (i = 0; i < n; i++)
+            for (j = i + 1; j < n; j++)
+                if (panel_ids_get((PanelId)panel, i) == panel_ids_get((PanelId)panel, j))
+                    dup++;
+    }
+    check(dup == 0, "no id appears twice in the same panel");
+}
+
+static void test_panel_membership_settings_set(void)
+{
+    /* set_active_mode: ctl_show(..., settings) with settings = (mode == 2). */
+    static const int expected[] = {
+        IDC_CAP_LANG, IDC_CAP_THEME, IDC_CAP_PALETTE, IDC_BTN_LANG_EN,
+        IDC_BTN_LANG_ES, IDC_BTN_THEME_SYSTEM, IDC_BTN_THEME_LIGHT,
+        IDC_BTN_THEME_DARK, IDC_LST_PALETTE
+    };
+    int n = (int)(sizeof expected / sizeof expected[0]);
+    int i;
+    note("== panel membership: Settings set matches set_active_mode ==");
+    check(panel_ids_count(PANEL_SETTINGS) == n, "Settings set has %d ids", n);
+    for (i = 0; i < n; i++) {
+        int found = 0, k;
+        for (k = 0; k < panel_ids_count(PANEL_SETTINGS); k++)
+            if (panel_ids_get(PANEL_SETTINGS, k) == expected[i])
+                found = 1;
+        check(found, "Settings owns control id %d", expected[i]);
+    }
+}
+
+static void test_panel_membership_library_set(void)
+{
+    /* set_active_mode: the 22 ctl_show(..., bib) calls with bib = (mode == 0). */
+    static const int expected[] = {
+        IDC_BTN_OPEN, IDC_BTN_REMOVE, IDC_BTN_CLEAR, IDC_GROUP_LIB, IDC_LIST,
+        IDC_GROUP_INFO, IDC_VAL_NAME, IDC_VAL_PATH, IDC_CAP_RATE, IDC_VAL_RATE,
+        IDC_CAP_CH, IDC_VAL_CH, IDC_CAP_DUR, IDC_VAL_DUR, IDC_CAP_LOOP,
+        IDC_VAL_LOOP, IDC_GROUP_SPEED, IDC_VAL_SPEED, IDC_VAL_DEVRATE,
+        IDC_BTN_SPEED, IDC_BTN_PAIR, IDC_CAP_VER
+    };
+    int n = (int)(sizeof expected / sizeof expected[0]);
+    int i;
+    note("== panel membership: Library set matches set_active_mode ==");
+    check(panel_ids_count(PANEL_LIBRARY) == n, "Library set has %d ids", n);
+    for (i = 0; i < n; i++) {
+        int found = 0, k;
+        for (k = 0; k < panel_ids_count(PANEL_LIBRARY); k++)
+            if (panel_ids_get(PANEL_LIBRARY, k) == expected[i])
+                found = 1;
+        check(found, "Library owns control id %d", expected[i]);
+    }
+}
+
 /* -------------------------------------------------------------------- main --- */
 
 int main(void)
@@ -738,6 +884,20 @@ int main(void)
     test_anim_stops();
     test_anim_restart_resets_progress();
     test_anim_stays_within_range();
+
+    test_slide_old_offset_at_start();
+    test_slide_old_offset_at_end();
+    test_slide_old_offset_mid();
+    test_slide_old_offset_clamp();
+    test_slide_new_offset_at_start();
+    test_slide_new_offset_at_end();
+    test_slide_new_offset_mid();
+    test_slide_new_offset_clamp();
+
+    test_panel_membership_disjoint();
+    test_panel_membership_no_duplicates();
+    test_panel_membership_library_set();
+    test_panel_membership_settings_set();
 
     {
         char line[200];

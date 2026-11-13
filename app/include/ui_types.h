@@ -61,12 +61,25 @@
 #define IDC_BTN_THEME_LIGHT   1113
 #define IDC_BTN_THEME_DARK    1114
 #define IDC_LST_PALETTE       1115
+/* Fieldset titles of the Settings panel: ids so the panel membership table
+ * can name every control of the mode (ui_panels.c). */
+#define IDC_CAP_LANG          1116
+#define IDC_CAP_THEME         1117
+#define IDC_CAP_PALETTE       1118
+/* Group boxes of the Library panel: ids so the panel membership table can
+ * name them. BS_GROUPBOX sends no WM_COMMAND, so the id is never used to
+ * route a click. */
+#define IDC_GROUP_LIB         1119
+#define IDC_GROUP_INFO        1120
+#define IDC_GROUP_SPEED       1121
 
 /* Short system message (B2), to the right of the big state text. */
 #define IDC_VAL_SYSTEM        1104
 
 #define TIMER_UI 1
+#define TIMER_SLIDE 2
 #define UI_TICK_MS 100
+#define SLIDE_DURATION_MS 200
 #define PROGRESS_CLASS_NAME L"MkwProgress"
 
 /* A library row owns both heap strings. Numeric fields are metadata copied

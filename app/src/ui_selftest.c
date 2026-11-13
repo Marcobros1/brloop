@@ -168,6 +168,13 @@ static int library_at_least(int count)
 
 static int active_mode_is_2(void)  { return g_active_mode == 2; }
 static int active_mode_is_0(void)  { return g_active_mode == 0; }
+static int slide_done(void)         { return !mode_slide_running(); }
+
+/* 1 when the window reports the control as visible (WS_VISIBLE). */
+static int ctl_visible(HWND h)
+{
+    return (GetWindowLongPtrW(h, GWL_STYLE) & WS_VISIBLE) != 0;
+}
 static int theme_light(void)       { return g_theme_choice == THEME_LIGHT; }
 static int theme_dark(void)        { return g_theme_choice == THEME_DARK; }
 static int theme_system(void)      { return g_theme_choice == THEME_SYSTEM; }
@@ -190,6 +197,14 @@ static void st_phase_modes_theme(void)
              "grupo Biblioteca oculto en modo Ajustes");
     st_check((GetWindowLongPtrW((*g_test->controls).list, GWL_STYLE) & WS_VISIBLE) == 0,
              "lista oculta en modo Ajustes");
+
+    /* Once the slide has ended, no Library control may be left on screen
+     * under the Settings controls (visual overlap, user report). */
+    wait_until_pred(slide_done, 2000);
+    st_check(!ctl_visible((*g_test->controls).btnSpeed),
+             "btnSpeed oculto en modo Ajustes");
+    st_check(!ctl_visible((*g_test->controls).groupInfo),
+             "groupInfo oculto en modo Ajustes");
 
     /* Theme and language from the buttons in the Settings panel (Q-121, Q-122).
      * The Settings controls are only visible in this mode. */
@@ -221,6 +236,16 @@ static void st_phase_modes_theme(void)
              "grupo Biblioteca visible en modo Biblioteca");
     st_check((GetWindowLongPtrW((*g_test->controls).list, GWL_STYLE) & WS_VISIBLE) != 0,
              "lista visible en modo Biblioteca");
+
+    /* Back from Settings: the Library controls that the slide did not show
+     * again must be visible once it ends. */
+    wait_until_pred(slide_done, 2000);
+    st_check(ctl_visible((*g_test->controls).btnOpen),
+             "btnOpen visible tras volver de Ajustes");
+    st_check(ctl_visible((*g_test->controls).groupInfo),
+             "groupInfo visible tras volver de Ajustes");
+    st_check(ctl_visible((*g_test->controls).btnSpeed),
+             "btnSpeed visible tras volver de Ajustes");
 }
 
 /* Defensive branches: out-of-range indexes must not move state, and the

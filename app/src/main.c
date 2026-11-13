@@ -39,10 +39,15 @@
 #include "ui_layout.h"
 #include "ui_library.h"
 #include "ui_dialogs.h"
+#include "panel_slide.h"
+#include "ui_panels.h"
+#include "anim.h"
 
 /* Forward declarations: functions defined in other modules that main.c calls.
  * ui_state.h externs the shared globals; these are the helpers main.c needs. */
 void set_active_mode(int mode);
+void start_mode_slide(int mode);
+static void set_active_mode_visibility(int mode);
 
 /* ------------------------------------------------------------- app state --
  * All file-scope globals moved to ui_state.c / ui_state.h. main.c keeps only
@@ -280,7 +285,7 @@ static void create_controls(HWND parent)
     InitCommonControlsEx(&icc);
 
     g_controls.groupLib = make_ctl(parent, 0, L"BUTTON", tr(STR_LIBRARY_GROUP),
-                              BS_GROUPBOX, 0, 0, 0, 0, 0);
+                              BS_GROUPBOX, IDC_GROUP_LIB, 0, 0, 0, 0);
     g_controls.btnOpen = make_ctl(parent, 0, L"BUTTON", tr(STR_BUTTON_OPEN),
                              BS_OWNERDRAW, IDC_BTN_OPEN, 0, 0, 0, 0);
     g_controls.btnRemove = make_ctl(parent, 0, L"BUTTON", tr(STR_BUTTON_REMOVE),
@@ -316,7 +321,7 @@ static void create_controls(HWND parent)
 
     g_controls.groupInfo = make_ctl(parent, 0, L"BUTTON",
                                tr(STR_FILE_INFO_GROUP), BS_GROUPBOX,
-                               0, 0, 0, 0, 0);
+                               IDC_GROUP_INFO, 0, 0, 0, 0);
     g_controls.capName = make_ctl(parent, 0, L"STATIC", tr(STR_CAP_NAME), 0,
                              IDC_CAP_NAME, 0, 0, 0, 0);
     g_controls.capCh = make_ctl(parent, 0, L"STATIC", tr(STR_CAP_CHANNELS), 0,
@@ -382,11 +387,11 @@ static void create_controls(HWND parent)
      * Created here, positioned by layout(); shown only in Settings mode.
      */
     g_controls.capLang = make_ctl(parent, 0, L"STATIC", tr(STR_SETTINGS_LANGUAGE),
-                               0, 0, 0, 0, 0, 0);
+                               0, IDC_CAP_LANG, 0, 0, 0, 0);
     g_controls.capTheme = make_ctl(parent, 0, L"STATIC", tr(STR_SETTINGS_THEME),
-                                0, 0, 0, 0, 0, 0);
+                                0, IDC_CAP_THEME, 0, 0, 0, 0);
     g_controls.capPalette = make_ctl(parent, 0, L"STATIC", tr(STR_SETTINGS_PALETTE),
-                                  0, 0, 0, 0, 0, 0);
+                                  0, IDC_CAP_PALETTE, 0, 0, 0, 0);
     g_controls.btnLangEn = make_ctl(parent, 0, L"BUTTON", tr(STR_MENU_ENGLISH),
                                  BS_OWNERDRAW, IDC_BTN_LANG_EN, 0, 0, 0, 0);
     g_controls.btnLangEs = make_ctl(parent, 0, L"BUTTON", tr(STR_MENU_SPANISH),
@@ -453,7 +458,7 @@ static void create_controls(HWND parent)
                                0, 0, 0, 0);
 
     g_controls.groupSpeed = make_ctl(parent, 0, L"BUTTON", tr(STR_SPEED_GROUP),
-                                BS_GROUPBOX, 0, 0, 0, 0, 0);
+                                BS_GROUPBOX, IDC_GROUP_SPEED, 0, 0, 0, 0);
     g_controls.valSpeed = make_ctl(parent, 0, L"STATIC", tr(STR_SPEED_NORMAL), SS_RIGHT,
                               IDC_VAL_SPEED, 0, 0, 0, 0);
     g_controls.valDevRate = make_ctl(parent, 0, L"STATIC", tr(STR_DEVICE_RATE_EMPTY),
@@ -515,10 +520,10 @@ static void on_command(int id)
         set_theme(THEME_DARK);
         break;
     case IDC_BTN_MODE_LIBRARY:
-        set_active_mode(0);
+        start_mode_slide(0);
         break;
     case IDC_BTN_MODE_SETTINGS:
-        set_active_mode(2);
+        start_mode_slide(2);
         break;
     case IDC_BTN_REMOVE:
         if (g_library.selected_index >= 0)
@@ -794,15 +799,223 @@ static void on_palette_changed(void)
     }
 }
 
-/* A2: activates a mode. Only the central block changes; the mode bar and
- * transport controls stay visible. The active mode is marked with color and
- * border when painted (WM_DRAWITEM). */
-void set_active_mode(int mode)
-{
-    if (g_active_mode == mode)
-        return;
-    g_active_mode = mode;
+/* ------------------------------------------------------------------ slide state -- */
 
+/* Slide animation state for Q-170 (mode change panel slide). */
+static Anim g_slide_anim;
+static int g_slide_mode_from;   /* mode that was visible before slide started */
+static int g_slide_mode_to;     /* mode that we're sliding to */
+static int g_slide_active;      /* 1 = slide in progress */
+static int g_slide_panel_width; /* width of the sliding panel (groupLib) */
+
+/* Panel slide (Q-170), window side. Every control of the outgoing panel
+ * (ui_panels.c, set of g_slide_mode_from) moves with panel_slide_old_offset();
+ * every control of the incoming panel (set of g_slide_mode_to) moves with
+ * panel_slide_new_offset(). Positions are the layout() ones: the incoming
+ * panel's rects are the final layout, and the outgoing panel keeps the rects
+ * it had before the change. No unit test: this depends on the window. */
+
+#define SLIDE_MAX_CTLS 32
+
+/* Rect of every control of a mode, as layout() places it, plus the handle.
+ * Filled once per slide: `from` before the change, `to` after layout(). */
+typedef struct {
+    HWND hwnd;
+    RECT rc;      /* normal position, in client coordinates */
+} SlideCtl;
+
+static SlideCtl g_slide_from[SLIDE_MAX_CTLS];
+static int g_slide_from_n;
+static SlideCtl g_slide_to[SLIDE_MAX_CTLS];
+static int g_slide_to_n;
+
+/* Handle of a control id, looked up through the Controls struct. Only ids that
+ * ui_panels.c lists are needed; any other id maps to NULL. */
+static HWND ctl_by_id(int id)
+{
+    switch (id) {
+    case IDC_BTN_OPEN: return g_controls.btnOpen;
+    case IDC_BTN_REMOVE: return g_controls.btnRemove;
+    case IDC_BTN_CLEAR: return g_controls.btnClear;
+    case IDC_GROUP_LIB: return g_controls.groupLib;
+    case IDC_LIST: return g_controls.list;
+    case IDC_GROUP_INFO: return g_controls.groupInfo;
+    case IDC_VAL_NAME: return g_controls.valName;
+    case IDC_VAL_PATH: return g_controls.valPath;
+    case IDC_CAP_RATE: return g_controls.capRate;
+    case IDC_VAL_RATE: return g_controls.valRate;
+    case IDC_CAP_CH: return g_controls.capCh;
+    case IDC_VAL_CH: return g_controls.valCh;
+    case IDC_CAP_DUR: return g_controls.capDur;
+    case IDC_VAL_DUR: return g_controls.valDur;
+    case IDC_CAP_LOOP: return g_controls.capLoop;
+    case IDC_VAL_LOOP: return g_controls.valLoop;
+    case IDC_GROUP_SPEED: return g_controls.groupSpeed;
+    case IDC_VAL_SPEED: return g_controls.valSpeed;
+    case IDC_VAL_DEVRATE: return g_controls.valDevRate;
+    case IDC_BTN_SPEED: return g_controls.btnSpeed;
+    case IDC_BTN_PAIR: return g_controls.btnPair;
+    case IDC_CAP_VER: return g_controls.capVer;
+    case IDC_CAP_LANG: return g_controls.capLang;
+    case IDC_CAP_THEME: return g_controls.capTheme;
+    case IDC_CAP_PALETTE: return g_controls.capPalette;
+    case IDC_BTN_LANG_EN: return g_controls.btnLangEn;
+    case IDC_BTN_LANG_ES: return g_controls.btnLangEs;
+    case IDC_BTN_THEME_SYSTEM: return g_controls.btnThemeSystem;
+    case IDC_BTN_THEME_LIGHT: return g_controls.btnThemeLight;
+    case IDC_BTN_THEME_DARK: return g_controls.btnThemeDark;
+    case IDC_LST_PALETTE: return g_controls.lstPalette;
+    default: return NULL;
+    }
+}
+
+/* Snapshots the rect of every control of `panel` into `out`. */
+static int slide_snapshot(PanelId panel, SlideCtl *out)
+{
+    int i, n = 0, count = panel_ids_count(panel);
+    for (i = 0; i < count && n < SLIDE_MAX_CTLS; i++) {
+        HWND h = ctl_by_id(panel_ids_get(panel, i));
+        if (!h)
+            continue;
+        out[n].hwnd = h;
+        GetWindowRect(h, &out[n].rc);
+        MapWindowPoints(NULL, g_hwnd, (POINT *)&out[n].rc, 2);
+        n++;
+    }
+    return n;
+}
+
+/* Moves the outgoing controls left and the incoming ones right-to-normal. */
+static void apply_slide_offsets(double progress)
+{
+    int i;
+    int off_old = panel_slide_old_offset(progress, g_slide_panel_width);
+    int off_new = panel_slide_new_offset(progress, g_slide_panel_width);
+
+    for (i = 0; i < g_slide_from_n; i++) {
+        RECT *r = &g_slide_from[i].rc;
+        MoveWindow(g_slide_from[i].hwnd, r->left + off_old, r->top,
+                   r->right - r->left, r->bottom - r->top, TRUE);
+    }
+    for (i = 0; i < g_slide_to_n; i++) {
+        RECT *r = &g_slide_to[i].rc;
+        MoveWindow(g_slide_to[i].hwnd, r->left + off_new, r->top,
+                   r->right - r->left, r->bottom - r->top, TRUE);
+    }
+}
+
+/* Union of the outgoing and incoming rects, repainted once the slide ends
+ * (or while it moves). Only the panel area is invalidated, never the window. */
+static void slide_invalidate_union(void)
+{
+    RECT u = { 0, 0, 0, 0 };
+    int i, first = 1;
+    for (i = 0; i < g_slide_from_n; i++) {
+        if (first) { u = g_slide_from[i].rc; first = 0; }
+        else UnionRect(&u, &u, &g_slide_from[i].rc);
+    }
+    for (i = 0; i < g_slide_to_n; i++) {
+        if (first) { u = g_slide_to[i].rc; first = 0; }
+        else UnionRect(&u, &u, &g_slide_to[i].rc);
+    }
+    if (!first) {
+        /* The moving rects can cover up to a panel width beyond their normal
+         * place; widen the invalid area by that much so no residue stays. */
+        int pad = g_slide_panel_width;
+        u.left -= pad;
+        u.right += pad;
+        InvalidateRect(g_hwnd, &u, FALSE);
+    }
+}
+
+/* The mode buttons sit above the panels, outside the slide's union, so they
+ * are repainted here: their accent colour follows g_active_mode. */
+static void slide_invalidate_mode_buttons(void)
+{
+    HWND btns[2] = { g_controls.btnModeLibrary, g_controls.btnModeSettings };
+    int i;
+    for (i = 0; i < 2; i++) {
+        RECT rc;
+        if (btns[i] && GetWindowRect(btns[i], &rc)) {
+            MapWindowPoints(NULL, g_hwnd, (POINT *)&rc, 2);
+            InvalidateRect(g_hwnd, &rc, FALSE);
+        }
+    }
+}
+
+int mode_slide_running(void)
+{
+    return g_slide_active;
+}
+
+/* Starts the mode change (Q-170). The state changes at once; the animation
+ * only moves the controls for 200 ms, from right to left. */
+void start_mode_slide(int mode_to)
+{
+    RECT rc;
+    if (g_active_mode == mode_to)
+        return;
+
+    g_slide_mode_from = g_active_mode;
+    g_slide_mode_to = mode_to;
+
+    /* Outgoing panel: where its controls are now. */
+    g_slide_from_n = slide_snapshot(g_active_mode == 0 ? PANEL_LIBRARY : PANEL_SETTINGS,
+                                    g_slide_from);
+    g_slide_panel_width = 400;
+    if (GetClientRect(g_controls.groupLib, &rc) && rc.right - rc.left > 0)
+        g_slide_panel_width = rc.right - rc.left;
+
+    /* State changes at once. Showing the incoming panel and laying it out
+     * puts its controls at their normal positions. */
+    g_active_mode = mode_to;
+    set_active_mode_visibility(mode_to);
+    layout();
+    g_slide_to_n = slide_snapshot(mode_to == 0 ? PANEL_LIBRARY : PANEL_SETTINGS,
+                                  g_slide_to);
+
+    /* Incoming controls start off to the right, and go on top while moving. */
+    {
+        int i;
+        for (i = 0; i < g_slide_to_n; i++)
+            SetWindowPos(g_slide_to[i].hwnd, HWND_TOP, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+
+    g_slide_active = 1;
+    anim_start(&g_slide_anim, GetTickCount(), SLIDE_DURATION_MS);
+    SetTimer(g_hwnd, TIMER_SLIDE, 16, NULL);
+    apply_slide_offsets(0.0);
+    slide_invalidate_union();
+    slide_invalidate_mode_buttons();
+}
+
+/* Ends the mode change: the outgoing controls are hidden, the incoming ones
+ * are back at their layout position, and the area is repainted. */
+static void finish_mode_slide(void)
+{
+    int i;
+    KillTimer(g_hwnd, TIMER_SLIDE);
+    g_slide_active = 0;
+    /* Invalida toda el area antes de reposicionar: borra cualquier resto
+     * de pixeles del desplazamiento (botones clonados en posiciones
+     * intermedias). Sin FillRect ni PrintWindow. */
+    InvalidateRect(g_hwnd, NULL, TRUE);
+    for (i = 0; i < g_slide_from_n; i++)
+        ShowWindow(g_slide_from[i].hwnd, SW_HIDE);
+    layout();
+    slide_invalidate_union();
+    slide_invalidate_mode_buttons();
+    /* Forza el repintado inmediato de toda el area y todos los hijos:
+     * elimina restos de pixeles del desplazamiento. Sin FillRect ni
+     * PrintWindow. */
+    RedrawWindow(g_hwnd, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+}
+
+/* Shows the controls of `mode` and hides the rest (no layout). Used by the
+ * instant change and by the slide, so both share one visibility rule. */
+static void set_active_mode_visibility(int mode)
+{
     int bib = (mode == 0);   /* Library: list + card + version */
 
     ctl_show(g_controls.btnOpen, bib);
@@ -847,7 +1060,17 @@ void set_active_mode(int mode)
     ctl_show(g_controls.btnThemeLight, settings);
     ctl_show(g_controls.btnThemeDark, settings);
     ctl_show(g_controls.lstPalette, settings);
+}
 
+/* A2: activates a mode. Instant apply for initial setup (create_controls),
+ * without slide animation. */
+void set_active_mode(int mode)
+{
+    if (g_active_mode == mode)
+        return;
+    g_active_mode = mode;
+
+    set_active_mode_visibility(mode);
     layout();
     RedrawWindow(g_hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ALLCHILDREN);
 }
@@ -970,6 +1193,13 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_TIMER:
         if (wp == TIMER_UI)
             update_ui();
+        else if (wp == TIMER_SLIDE && g_slide_active) {
+            double progress = anim_progress(&g_slide_anim, GetTickCount());
+            if (progress >= 1.0)
+                finish_mode_slide();
+            else
+                apply_slide_offsets(progress);
+        }
         return 0;
 
     case WM_DRAWITEM: {

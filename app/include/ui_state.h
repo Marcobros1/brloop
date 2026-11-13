@@ -57,4 +57,8 @@ void set_system_message(const wchar_t *text);
 void format_time(wchar_t *out, size_t n, double sec);
 void apply_speed(uint32_t ppm);
 
+/* 1 while the mode-change slide (Q-170) is moving the panels, 0 when it has
+ * ended. Lets the self-test wait for the final layout. */
+int mode_slide_running(void);
+
 #endif /* UI_STATE_H */
