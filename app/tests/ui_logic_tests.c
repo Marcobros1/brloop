@@ -721,30 +721,30 @@ static void test_anim_stays_within_range(void)
 static void test_slide_old_offset_at_start(void)
 {
     note("== slide old offset at start (p=0) ==");
-    check(panel_slide_old_offset(0.0, 400) == 0,
-          "p=0.0, width=400: old panel at normal position (0)");
+    check(panel_slide_old_offset(0.0, 400, -1) == 0,
+          "p=0.0, width=400, dir=-1: old panel at normal position (0)");
 }
 
 static void test_slide_old_offset_at_end(void)
 {
     note("== slide old offset at end (p=1) ==");
-    check(panel_slide_old_offset(1.0, 400) == -400,
-          "p=1.0, width=400: old panel fully out to the left (-400)");
+    check(panel_slide_old_offset(1.0, 400, -1) == -400,
+          "p=1.0, width=400, dir=-1: old panel fully out to the left (-400)");
 }
 
 static void test_slide_old_offset_mid(void)
 {
     note("== slide old offset at mid (p=0.5) ==");
-    check(panel_slide_old_offset(0.5, 400) == -200,
-          "p=0.5, width=400: old panel halfway out to the left (-200)");
+    check(panel_slide_old_offset(0.5, 400, -1) == -200,
+          "p=0.5, width=400, dir=-1: old panel halfway out to the left (-200)");
 }
 
 static void test_slide_old_offset_clamp(void)
 {
     note("== slide old offset clamps progress to [0, 1] ==");
-    check(panel_slide_old_offset(-0.3, 400) == 0,
+    check(panel_slide_old_offset(-0.3, 400, -1) == 0,
           "p<0: old offset clamped to 0");
-    check(panel_slide_old_offset(1.3, 400) == -400,
+    check(panel_slide_old_offset(1.3, 400, -1) == -400,
           "p>1: old offset clamped to -width");
 }
 
@@ -753,30 +753,90 @@ static void test_slide_old_offset_clamp(void)
 static void test_slide_new_offset_at_start(void)
 {
     note("== slide new offset at start (p=0) ==");
-    check(panel_slide_new_offset(0.0, 400) == 400,
-          "p=0.0, width=400: new panel fully out to the right (+400)");
+    check(panel_slide_new_offset(0.0, 400, -1) == 400,
+          "p=0.0, width=400, dir=-1: new panel fully out to the right (+400)");
 }
 
 static void test_slide_new_offset_at_end(void)
 {
     note("== slide new offset at end (p=1) ==");
-    check(panel_slide_new_offset(1.0, 400) == 0,
-          "p=1.0, width=400: new panel at normal position (0)");
+    check(panel_slide_new_offset(1.0, 400, -1) == 0,
+          "p=1.0, width=400, dir=-1: new panel at normal position (0)");
 }
 
 static void test_slide_new_offset_mid(void)
 {
     note("== slide new offset at mid (p=0.5) ==");
-    check(panel_slide_new_offset(0.5, 400) == 200,
-          "p=0.5, width=400: new panel halfway in from the right (+200)");
+    check(panel_slide_new_offset(0.5, 400, -1) == 200,
+          "p=0.5, width=400, dir=-1: new panel halfway in from the right (+200)");
 }
 
 static void test_slide_new_offset_clamp(void)
 {
     note("== slide new offset clamps progress to [0, 1] ==");
-    check(panel_slide_new_offset(-0.3, 400) == 400,
+    check(panel_slide_new_offset(-0.3, 400, -1) == 400,
           "p<0: new offset clamped to +width");
-    check(panel_slide_new_offset(1.3, 400) == 0,
+    check(panel_slide_new_offset(1.3, 400, -1) == 0,
+          "p>1: new offset clamped to 0");
+}
+
+static void test_slide_old_offset_reverse_at_start(void)
+{
+    note("== slide old offset reverse at start (p=0, dir=+1) ==");
+    check(panel_slide_old_offset(0.0, 400, +1) == 0,
+          "p=0.0, width=400, dir=+1: old panel at normal position (0)");
+}
+
+static void test_slide_old_offset_reverse_at_end(void)
+{
+    note("== slide old offset reverse at end (p=1, dir=+1) ==");
+    check(panel_slide_old_offset(1.0, 400, +1) == 400,
+          "p=1.0, width=400, dir=+1: old panel fully out to the right (+400)");
+}
+
+static void test_slide_old_offset_reverse_mid(void)
+{
+    note("== slide old offset reverse at mid (p=0.5, dir=+1) ==");
+    check(panel_slide_old_offset(0.5, 400, +1) == 200,
+          "p=0.5, width=400, dir=+1: old panel halfway out to the right (+200)");
+}
+
+static void test_slide_old_offset_reverse_clamp(void)
+{
+    note("== slide old offset reverse clamps progress to [0, 1] (dir=+1) ==");
+    check(panel_slide_old_offset(-0.3, 400, +1) == 0,
+          "p<0: old offset clamped to 0");
+    check(panel_slide_old_offset(1.3, 400, +1) == 400,
+          "p>1: old offset clamped to +width");
+}
+
+static void test_slide_new_offset_reverse_at_start(void)
+{
+    note("== slide new offset reverse at start (p=0, dir=+1) ==");
+    check(panel_slide_new_offset(0.0, 400, +1) == -400,
+          "p=0.0, width=400, dir=+1: new panel fully out to the left (-400)");
+}
+
+static void test_slide_new_offset_reverse_at_end(void)
+{
+    note("== slide new offset reverse at end (p=1, dir=+1) ==");
+    check(panel_slide_new_offset(1.0, 400, +1) == 0,
+          "p=1.0, width=400, dir=+1: new panel at normal position (0)");
+}
+
+static void test_slide_new_offset_reverse_mid(void)
+{
+    note("== slide new offset reverse at mid (p=0.5, dir=+1) ==");
+    check(panel_slide_new_offset(0.5, 400, +1) == -200,
+          "p=0.5, width=400, dir=+1: new panel halfway in from the left (-200)");
+}
+
+static void test_slide_new_offset_reverse_clamp(void)
+{
+    note("== slide new offset reverse clamps progress to [0, 1] (dir=+1) ==");
+    check(panel_slide_new_offset(-0.3, 400, +1) == -400,
+          "p<0: new offset clamped to -width");
+    check(panel_slide_new_offset(1.3, 400, +1) == 0,
           "p>1: new offset clamped to 0");
 }
 
@@ -893,6 +953,14 @@ int main(void)
     test_slide_new_offset_at_end();
     test_slide_new_offset_mid();
     test_slide_new_offset_clamp();
+    test_slide_old_offset_reverse_at_start();
+    test_slide_old_offset_reverse_at_end();
+    test_slide_old_offset_reverse_mid();
+    test_slide_old_offset_reverse_clamp();
+    test_slide_new_offset_reverse_at_start();
+    test_slide_new_offset_reverse_at_end();
+    test_slide_new_offset_reverse_mid();
+    test_slide_new_offset_reverse_clamp();
 
     test_panel_membership_disjoint();
     test_panel_membership_no_duplicates();

@@ -7,12 +7,12 @@ static double clamp01(double v)
     return v;
 }
 
-int panel_slide_old_offset(double progress, int width)
+int panel_slide_old_offset(double progress, int width, int direction)
 {
-    return (int)(-width * clamp01(progress));
+    return (int)(direction * width * clamp01(progress));
 }
 
-int panel_slide_new_offset(double progress, int width)
+int panel_slide_new_offset(double progress, int width, int direction)
 {
-    return (int)(width * (1.0 - clamp01(progress)));
+    return (int)(-direction * width * (1.0 - clamp01(progress)));
 }

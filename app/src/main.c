@@ -807,6 +807,8 @@ static int g_slide_mode_from;   /* mode that was visible before slide started */
 static int g_slide_mode_to;     /* mode that we're sliding to */
 static int g_slide_active;      /* 1 = slide in progress */
 static int g_slide_panel_width; /* width of the sliding panel (groupLib) */
+static int g_slide_direction;   /* -1 = old leaves left (Library->Settings),
+                                   +1 = old leaves right (Settings->Library) */
 
 /* Panel slide (Q-170), window side. Every control of the outgoing panel
  * (ui_panels.c, set of g_slide_mode_from) moves with panel_slide_old_offset();
@@ -885,12 +887,17 @@ static int slide_snapshot(PanelId panel, SlideCtl *out)
     return n;
 }
 
-/* Moves the outgoing controls left and the incoming ones right-to-normal. */
+/* Moves the outgoing controls and the incoming ones according to
+ * g_slide_direction: -1 = old leaves left / new enters from right
+ * (Library -> Settings), +1 = old leaves right / new enters from left
+ * (Settings -> Library). */
 static void apply_slide_offsets(double progress)
 {
     int i;
-    int off_old = panel_slide_old_offset(progress, g_slide_panel_width);
-    int off_new = panel_slide_new_offset(progress, g_slide_panel_width);
+    int off_old = panel_slide_old_offset(progress, g_slide_panel_width,
+                                         g_slide_direction);
+    int off_new = panel_slide_new_offset(progress, g_slide_panel_width,
+                                         g_slide_direction);
 
     for (i = 0; i < g_slide_from_n; i++) {
         RECT *r = &g_slide_from[i].rc;
@@ -958,6 +965,10 @@ void start_mode_slide(int mode_to)
 
     g_slide_mode_from = g_active_mode;
     g_slide_mode_to = mode_to;
+    /* Direction: -1 = old leaves left / new enters from right (Library ->
+     * Settings). +1 = old leaves right / new enters from left
+     * (Settings -> Library). */
+    g_slide_direction = (g_slide_mode_from == 2) ? +1 : -1;
 
     /* Outgoing panel: where its controls are now. */
     g_slide_from_n = slide_snapshot(g_active_mode == 0 ? PANEL_LIBRARY : PANEL_SETTINGS,
