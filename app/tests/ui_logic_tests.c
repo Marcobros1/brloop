@@ -840,6 +840,33 @@ static void test_slide_new_offset_reverse_clamp(void)
           "p>1: new offset clamped to 0");
 }
 
+/* panel_slide_frame_rect: el rastro de un control entre dos frames cubre la
+ * posición de salida y la de entrada, sin crecer en alto. Usado por el
+ * repintado inmediato de cada frame del slide (Q-170). */
+static void test_slide_frame_rect_covers_both_positions(void)
+{
+    RECT rc = { 100, 50, 140, 90 };
+
+    note("== panel_slide_frame_rect cubre posición previa y actual ==");
+    check(panel_slide_frame_rect(&rc, -200, -100).left == 100 - 200 &&
+              panel_slide_frame_rect(&rc, -200, -100).right == 140 - 100,
+          "cubre desde la posición previa (-200) hasta la actual (-100)");
+    check(panel_slide_frame_rect(&rc, -200, -100).top == 50 &&
+              panel_slide_frame_rect(&rc, -200, -100).bottom == 90,
+          "alto sin cambios entre frames");
+}
+
+static void test_slide_frame_rect_same_offset_is_the_rect(void)
+{
+    RECT rc = { 100, 50, 140, 90 };
+    RECT r = panel_slide_frame_rect(&rc, 0, 0);
+
+    note("== panel_slide_frame_rect, mismo offset en ambos frames ==");
+    check(r.left == rc.left && r.right == rc.right && r.top == rc.top &&
+              r.bottom == rc.bottom,
+          "sin movimiento: el rastro es el propio rect del control");
+}
+
 /* ------------------------------------------------------- panel membership --- */
 
 /* Which controls belong to which mode (set_active_mode in main.c). Pure
@@ -961,6 +988,8 @@ int main(void)
     test_slide_new_offset_reverse_at_end();
     test_slide_new_offset_reverse_mid();
     test_slide_new_offset_reverse_clamp();
+    test_slide_frame_rect_covers_both_positions();
+    test_slide_frame_rect_same_offset_is_the_rect();
 
     test_panel_membership_disjoint();
     test_panel_membership_no_duplicates();

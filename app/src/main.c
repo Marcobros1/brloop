@@ -809,6 +809,7 @@ static int g_slide_active;      /* 1 = slide in progress */
 static int g_slide_panel_width; /* width of the sliding panel (groupLib) */
 static int g_slide_direction;   /* -1 = old leaves left (Library->Settings),
                                    +1 = old leaves right (Settings->Library) */
+static double g_slide_prev_progress; /* progreso del frame anterior del slide */
 
 /* Panel slide (Q-170), window side. Every control of the outgoing panel
  * (ui_panels.c, set of g_slide_mode_from) moves with panel_slide_old_offset();
@@ -911,6 +912,48 @@ static void apply_slide_offsets(double progress)
     }
 }
 
+/* Un frame del slide en movimiento: cada control movido se invalida en la
+ * posición que acaba de dejar y en la que ocupa ahora, y se fuerza el
+ * repintado inmediato. Así el texto se dibuja solo en la posición actual de
+ * cada control y no quedan restos en las posiciones intermedias del trayecto
+ * (criterio 5: no quedan restos visuales al terminar el efecto; Q-170:
+ * texto limpio durante los 200 ms de movimiento). */
+static void slide_paint_frame(double progress)
+{
+    RECT u = { 0, 0, 0, 0 };
+    int i, first = 1;
+
+    for (i = 0; i < g_slide_from_n; i++) {
+        RECT *r = &g_slide_from[i].rc;
+        RECT w = panel_slide_frame_rect(r,
+            panel_slide_old_offset(g_slide_prev_progress, g_slide_panel_width,
+                                   g_slide_direction),
+            panel_slide_old_offset(progress, g_slide_panel_width,
+                                   g_slide_direction));
+        if (first) { u = w; first = 0; }
+        else UnionRect(&u, &u, &w);
+    }
+    for (i = 0; i < g_slide_to_n; i++) {
+        RECT *r = &g_slide_to[i].rc;
+        RECT w = panel_slide_frame_rect(r,
+            panel_slide_new_offset(g_slide_prev_progress, g_slide_panel_width,
+                                   g_slide_direction),
+            panel_slide_new_offset(progress, g_slide_panel_width,
+                                   g_slide_direction));
+        if (first) { u = w; first = 0; }
+        else UnionRect(&u, &u, &w);
+    }
+
+    g_slide_prev_progress = progress;
+
+    if (!first) {
+        /* Invalida el rastro del frame y lo repinta de inmediato: cada
+         * control en su posición actual, fondo limpio en la que deja. */
+        RedrawWindow(g_hwnd, &u, NULL, RDW_INVALIDATE | RDW_UPDATENOW |
+                                        RDW_ALLCHILDREN);
+    }
+}
+
 /* Union of the outgoing and incoming rects, repainted once the slide ends
  * (or while it moves). Only the panel area is invalidated, never the window. */
 static void slide_invalidate_union(void)
@@ -997,6 +1040,7 @@ void start_mode_slide(int mode_to)
     anim_start(&g_slide_anim, GetTickCount(), SLIDE_DURATION_MS);
     SetTimer(g_hwnd, TIMER_SLIDE, 16, NULL);
     apply_slide_offsets(0.0);
+    g_slide_prev_progress = 0.0;
     slide_invalidate_union();
     slide_invalidate_mode_buttons();
 }
@@ -1208,8 +1252,10 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             double progress = anim_progress(&g_slide_anim, GetTickCount());
             if (progress >= 1.0)
                 finish_mode_slide();
-            else
+            else {
                 apply_slide_offsets(progress);
+                slide_paint_frame(progress);
+            }
         }
         return 0;
 
