@@ -13,12 +13,21 @@ Dirección visual del reproductor. La escribe el dueño del proyecto; el filtro 
 - **ENERGY 3 (llamativa):** la interfaz debe llamar la atención, con presencia visual y color. La energía debe proceder de la identidad gráfica, el contraste y los elementos destacados, sin convertir todos los controles en elementos que compitan por atención.
 - **RHYTHM 1 (uniforme):** bloques del mismo peso y orden predecible. La uniformidad es una elección del dueño. Los bloques principales mantienen una estructura, distribución y peso visual uniformes. Se permite jerarquía dentro de cada bloque para distinguir información y controles, sin alterar el ritmo general.
 - **Excepción a RHYTHM 1 para la disposición A2 (modos con color):** la barra de modos (Biblioteca, Ajustes) cambia el contenido del bloque central según el modo activo. No hay modo Versiones (Q-119): el botón de par y el campo Versión están en la pantalla principal (Q-092). Lo que cambia por modo es solo el contenido del bloque central; la barra de modos, el estado de reproducción y los controles de reproducción se mantienen iguales en todos los modos. El modo activo se marca con color y con borde (WCAG 1.4.1). Motivo: el usuario quiere que cada modo tenga su color, como en Super Smash Bros. Melee; la uniformidad se mantiene en los bloques de reproducción. Ajustes tiene contenido propio: idioma, tema y paleta en el panel central (decisión del usuario, 2026-11-05). Biblioteca no tiene botones de idioma ni tema. Decisión tomada en Q-074, Q-078 y Q-119.
+<<<<<<< HEAD
 - **MOTION 2 (momentos puntuales):** el estado cambia al instante con la acción del usuario y el movimiento solo lo acompaña; nunca bloquea la entrada. Lista cerrada de efectos, todos de un solo ciclo (Q-160):
   1. Halo alrededor de Play al empezar o reanudar la reproducción, para confirmar la pulsación.
   2. Los botones de reproducción (anterior, Play, siguiente) y el de velocidad encogen mientras están pulsados, sin cambiar su zona clicable.
   3. Barrido de la barra de progreso al cambiar de pista, para avisar de que vuelve al inicio.
   4. Fundido del panel central al cambiar de modo, sin mover los controles.
 - **Fuera de MOTION:** no se añade ningún otro movimiento. Sin bucles, sin transiciones de color, sin desplazar filas ni paneles. La barra de progreso sigue la posición al instante, también al saltar con el ratón.
+=======
+- **MOTION:** cuatro efectos de un solo ciclo (Q-160, variante 4).
+   - Encogido de botones al 94% al pulsar (Q-161)
+   - Desplazamiento horizontal de paneles (Q-170)
+   - Barrido de progreso al cambiar de pista
+   - Sin halo de Play (Q-163/Q-164 descartado)
+   Spec: `docs/specs/motion.md`
+>>>>>>> 6ba412c (DOC: actualiza DESIGN.md y crea spec formal de MOTION)
 
 ## Personalidad
 
@@ -85,7 +94,11 @@ La arquitectura multiplataforma y las tecnologías de cada versión se decidirá
 
 1. Colores concretos para los temas claro y oscuro.
 2. Comprobar `1/I/l` con Pixelify Sans en la ventana real, a 16 px, en la biblioteca y en la barra.
+<<<<<<< HEAD
 3. Movimiento (MOTION): aspecto del barrido de la barra de progreso al cambiar de pista, duraciones definitivas en la ventana real, y si la app respeta el ajuste de Windows que desactiva las animaciones.
 4. Orden de desarrollo de la segunda plataforma: Android o Web.
+=======
+3. Orden de desarrollo de la segunda plataforma: Android o Web.
+>>>>>>> 6ba412c (DOC: actualiza DESIGN.md y crea spec formal de MOTION)
 
 Las decisiones pendientes deben permanecer abiertas. No se deben completar mediante suposiciones durante la implementación.
